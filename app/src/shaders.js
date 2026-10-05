@@ -63,6 +63,18 @@ uniform vec4 uBreath;  // x inhale amount 0..1, y d/dt sign, z cycle phase
 uniform vec4 uAnimA;   // heart, breathing, blood flow, nerves
 uniform vec4 uAnimB;   // digestion, urine, brain, airflow
 uniform float uBladder;
+// female body shape (data): the skin has exact per-vertex offsets (and female normals); everything
+// else samples a smooth 3D field plus a per-vertex correction near the skin
+#ifdef FEM_ATTR
+attribute vec3 aFemD;   // skin: offset to the female shape; others: correction to the field (0.1 mm units)
+#endif
+#ifdef FEM_ABS
+attribute vec2 aFemN;   // female normal (octahedral)
+#endif
+uniform highp sampler3D uFemField;
+uniform vec3 uFemMin;
+uniform vec3 uFemInv;
+varying vec3 vFemPos;   // rest position in the female body (areola placement)
 ${WARP_GLSL}
 varying vec3 vMalePos;
 varying vec3 vWPos;
@@ -112,22 +124,50 @@ void anatomyVertex(out vec3 outPos, inout vec3 n, out float cull) {
     (!(dolls && pgc > 1.5) && ((sex > 0.5 && sex < 1.5 && uFemale >= 0.5) || (sex > 1.5 && uFemale < 0.5)));
   bool lodHidden = (hi > 0.5) != (uLodPass > 0.5);
   cull = (st < 0.5 || sexHidden || lodHidden) ? 1.0 : 0.0;
-  vec3 p = position * uQScale + uQMin;
-  vMalePos = p;
-  p = anatAnimate(p, n, ad.x, ad.yzw, aFlow);
-  p += fd.xyz * uFemale;
-  bool skin = uIsSkin > 0.5 && mod(xd.w, 2.0) < 0.5;
-  vec3 pw = warpPoint(p, skin);
-  vCavity = skin ? uFemale * vulvaCavity(p) : 0.0;
-  if (uFemale > 0.0 || (skin && uPG > 0.0)) {
-    vec3 t1 = normalize(abs(n.y) < 0.9 ? cross(n, vec3(0.0, 1.0, 0.0)) : cross(n, vec3(1.0, 0.0, 0.0)));
-    vec3 t2 = cross(n, t1);
-    float e = 0.001;
-    vec3 a = warpPoint(p + t1 * e, skin) - pw;
-    vec3 b = warpPoint(p + t2 * e, skin) - pw;
-    vec3 nn = cross(a, b);
-    if (dot(nn, nn) > 1e-14) n = normalize(nn);
+  vec3 p0 = position * uQScale + uQMin;  // male rest position
+  vMalePos = p0;
+  vec3 p = anatAnimate(p0, n, ad.x, ad.yzw, aFlow);
+  bool skin = uIsSkin > 0.5;
+  bool femSpace = mod(floor(xd.w / 4.0 + 0.01), 2.0) > 0.5; // female-only parts are stored in the female shape
+  vec3 nMale = n;
+  // female shape offset and normal
+  vec3 fem = vec3(0.0), femN = n;
+  if (uFemale > 0.0 && !femSpace) {
+#ifdef FEM_ABS
+    fem = aFemD * 1e-4;
+    vec3 o = vec3(aFemN, 1.0 - abs(aFemN.x) - abs(aFemN.y));
+    if (o.z < 0.0) o.xy = (1.0 - abs(o.yx)) * vec2(o.x >= 0.0 ? 1.0 : -1.0, o.y >= 0.0 ? 1.0 : -1.0);
+    femN = normalize(o);
+#else
+    fem = texture(uFemField, (p0 - uFemMin) * uFemInv).xyz;
+#ifdef FEM_ATTR
+    fem += aFemD * 1e-4;
+#endif
+#endif
   }
+  vFemPos = p0 + fem;
+  // small analytic touches on the skin, in male space: nipples flattened (doll modes; and in the
+  // female body, whose nipples are separate parts) and the female cleft and labia
+  vCavity = 0.0;
+  if (skin && !femSpace && nearSkinFeature(p)) {
+    float flatten = max(uPG, uFemale);
+    vec3 q = flatten > 0.0 ? dollFlatten(p, flatten) : p;
+    q += vulvaDisp(p) * uFemale;
+    vCavity = uFemale * vulvaCavity(p);
+    if (flatten > 0.0 || uFemale > 0.0) {
+      vec3 t1 = normalize(abs(n.y) < 0.9 ? cross(n, vec3(0.0, 1.0, 0.0)) : cross(n, vec3(1.0, 0.0, 0.0)));
+      vec3 t2 = cross(n, t1);
+      float e = 0.001;
+      vec3 pa = p + t1 * e, pb = p + t2 * e;
+      vec3 qa = (flatten > 0.0 ? dollFlatten(pa, flatten) : pa) + vulvaDisp(pa) * uFemale;
+      vec3 qb = (flatten > 0.0 ? dollFlatten(pb, flatten) : pb) + vulvaDisp(pb) * uFemale;
+      vec3 nn = cross(qa - q, qb - q);
+      if (dot(nn, nn) > 1e-14) { nn = normalize(nn); femN = normalize(femN + (nn - nMale)); n = nn; }
+    }
+    p = q;
+  }
+  if (uFemale > 0.0) n = normalize(mix(n, femN, uFemale));
+  vec3 pw = p + (fem + fd.xyz) * uFemale;
   outPos = pw + pd.xyz;
   vWPos = outPos;
   vFlow = aFlow; vTissue = aTissue; vAnimCode = ad.x; vAxis = xd.xyz; vRough = aRough; vFlags = xd.w; vPid = float(pid);
@@ -172,6 +212,8 @@ uniform float uPG;
 uniform vec3 uKeyDir;   // view space
 uniform float uDetail;  // 0..1 procedural detail strength
 varying vec3 vMalePos;
+varying vec3 vFemPos;
+uniform vec4 uAreola[2];  // female areolas: centre (female rest space), radius
 varying vec3 vWPos;
 varying float vFlow;
 varying float vTissue;

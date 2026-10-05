@@ -3,7 +3,7 @@
 // standard adult (nulliparous) reference values.
 import { createNoise3D } from 'simplex-noise';
 import cdt2d from 'cdt2d';
-import { skinBulge, BREAST, VULVA, vulvaAmount } from '../app/src/warp.js';
+import { VULVA, vulvaAmount } from '../app/src/warp.js';
 import { createRequire } from 'module';
 const require_fs = () => createRequire(import.meta.url)('fs');
 
@@ -306,8 +306,9 @@ export function femaleParts(ctx) {
   buildVagina();
 
   // ---- Breasts ----
-  if (ctx.skinZ && ctx.muscleZ) {
-    for (const s of [1, -1]) out.push(...buildBreast(s, ctx));
+  if (ctx.skinZf && ctx.muscleZf && ctx.breast) {
+    out.apex = {};
+    for (const s of [1, -1]) out.push(...buildBreast(s, ctx, out.apex));
   }
 
   // ---- Ovarian and uterine vessels ----
@@ -426,7 +427,9 @@ function buildVulvaSkin(maleParts, otherSkin) {
     const hx = 0.0012, ht = 0.016;
     const minDistB = (q) => { let d = Infinity; for (const b of b2) d = Math.min(d, Math.hypot((q[0] - b[0]) / hx, (q[1] - b[1]) / ht)); return d; };
     for (let t = minT; t <= maxT; t += ht) for (let x = minX; x <= maxX; x += hx) { const q = [x + (Math.round((t - minT) / ht) % 2 ? hx / 2 : 0), t]; if (inside(q) && minDistB(q) > 0.8) pts2.push(q); }
-    const tris = cdt2d(pts2, edges, { exterior: false });
+    // triangulate in metres (x, arc length at a typical radius): in raw (x, angle) units the
+    // triangles would be long slivers across x
+    const tris = cdt2d(pts2.map(([x, t]) => [x, t * 0.075]), edges, { exterior: false });
     const nB = b2.length, nV = pts2.length;
     // Radius field: biharmonic fill on a regular (x, θ) grid whose outer band is ray-cast
     // from the surrounding skin, so the patch meets its neighbours with matching slope.
@@ -578,15 +581,19 @@ function buildVulvaSkin(maleParts, otherSkin) {
 // ---------------------------------------------------------------------------
 // Breast: adipose body (skin layer), glandular lobes, lactiferous ducts, nipple
 // ---------------------------------------------------------------------------
-function buildBreast(s, ctx) {
+// Built directly in the female body's shape (ctx.skinZf / ctx.muscleZf are female-space height
+// fields over the front of the chest; ctx.breast gives each breast's footprint and apex).
+function buildBreast(s, ctx, apexOut) {
   const side = s > 0 ? 'L' : 'R';
   const res = [];
-  const cx = s * BREAST.x, cy = BREAST.y;
+  const B = ctx.breast[s > 0 ? 'L' : 'R'];
+  const BREAST = { rx: B.rx * 0.95, ryUp: B.ryUp * 0.95, ryDown: B.ryDown * 0.95 };
+  const cx = B.cx, cy = B.cy;
   // footprint grid in (u,v) unit disk
   const N = 34;
   const foot = (u, v) => [cx + u * BREAST.rx * 1.02, cy + v * (v < 0 ? BREAST.ryDown : BREAST.ryUp) * 1.02];
-  const surfFront = (x, y) => { const z0 = ctx.skinZ(x, y); const b = skinBulge(x, y, z0); const n = norm([b[0] * 0.3, b[1] * 0.3, 1]); return [x + b[0] - n[0] * 0.0045, y + b[1] - n[1] * 0.0045, z0 + b[2] - 0.0045]; };
-  const surfBack = (x, y) => [x, y, ctx.muscleZ(x, y) + 0.0015];
+  const surfFront = (x, y) => [x, y, ctx.skinZf(x, y) - 0.0045];
+  const surfBack = (x, y) => [x, y, Math.min(ctx.muscleZf(x, y) + 0.0015, ctx.skinZf(x, y) - 0.006)];
   const fat = new Mesh();
   const grid = [], gridB = [];
   for (let i = 0; i <= N; i++) {
@@ -616,17 +623,19 @@ function buildBreast(s, ctx) {
     const [i0, j0] = rim[k], [i1, j1] = rim[(k + 1) % rim.length];
     if (s > 0) fat.quad(grid[i0][j0], gridB[i0][j0], gridB[i1][j1], grid[i1][j1]); else fat.quad(grid[i0][j0], grid[i1][j1], gridB[i1][j1], gridB[i0][j0]);
   }
-  res.push({ name: 'Breast adipose tissue', sys: 'skin', side, groups: ['Breast'], prims: [fat.prim('Breast fat')], noBulge: 1 });
+  res.push({ name: 'Breast adipose tissue', sys: 'skin', side, groups: ['Breast'], prims: [fat.prim('Breast fat')], femSpace: 1 });
 
-  // apex (nipple base) and depth
-  const apex = surfFront(cx, cy);
-  const backC = surfBack(cx, cy);
-  const axisOut = norm(sub(apex, backC));
-  // nipple + areola disc (skin layer)
-  // nipple: a lathe with a rounded dome (no pole pinching), rising ~4 mm above the areola
-  const nipAxis = spline([add(apex, mul(axisOut, 0.0035)), add(apex, mul(axisOut, 0.0095))], 24);
-  const nip = loft(nipAxis, (a, t) => { const r = 0.0046 * Math.pow(Math.max(0, 1 - Math.pow(t, 3)), 0.5) * (1 + 0.06 * (1 - t)) + 1e-5; return [Math.sin(a) * r, Math.cos(a) * r]; }, { seg: 36, capStart: true, capEnd: false, up: [0, 1, 0] });
-  res.push({ name: 'Nipple', sys: 'skin', side, groups: ['Breast'], prims: [nip.prim('Nipple')], noBulge: 1 });
+  // apex: the breast's most projecting point (from the fitted shape); the nipple sits on the skin there
+  const ax = B.apex ? B.apex[0] : cx, ay = B.apex ? B.apex[1] : cy, e = 0.004;
+  const skinAt = (x, y) => [x, y, ctx.skinZf(x, y)];
+  const apexSkin = skinAt(ax, ay);
+  const axisOut = norm([-(ctx.skinZf(ax + e, ay) - ctx.skinZf(ax - e, ay)) / (2 * e), -(ctx.skinZf(ax, ay + e) - ctx.skinZf(ax, ay - e)) / (2 * e), 1]);
+  const apex = add(apexSkin, mul(axisOut, -0.0045));
+  apexOut[side] = { c: apexSkin, n: axisOut };
+  // nipple: a soft rounded dome ~3 mm above the areola (no pole pinching)
+  const nipAxis = spline([add(apexSkin, mul(axisOut, -0.0012)), add(apexSkin, mul(axisOut, 0.0032))], 24);
+  const nip = loft(nipAxis, (a, t) => { const r = 0.0042 * Math.pow(Math.max(0, 1 - Math.pow(t, 2.4)), 0.55) * (1 + 0.08 * (1 - t)) + 1e-5; return [Math.sin(a) * r, Math.cos(a) * r]; }, { seg: 36, capStart: true, capEnd: false, up: [0, 1, 0] });
+  res.push({ name: 'Nipple', sys: 'skin', side, groups: ['Breast'], prims: [nip.prim('Nipple')], femSpace: 1 });
 
   // glandular lobes radiating from the nipple, each a cluster of small lobules, mid-depth in the fat
   const lobes = new Mesh(), ducts = new Mesh();
@@ -637,9 +646,9 @@ function buildBreast(s, ctx) {
     const reach = 0.5 + 0.14 * rand() + (u * s > 0.35 && v > 0.15 ? 0.16 : 0); // axillary tail
     let [x1, y1] = foot(u * reach, v * reach);
     // stay on the front of the chest wall (its side turns away at |x| ~ 0.16)
-    x1 = Math.sign(x1) * Math.min(Math.abs(x1), 0.14);
+    x1 = s > 0 ? Math.min(x1, cx + BREAST.rx * 0.8) : Math.max(x1, cx - BREAST.rx * 0.8);
     const tip = lerp(surfBack(x1, y1), surfFront(x1, y1), 0.42);
-    const [x0, y0] = foot(u * 0.14, v * 0.14);
+    const x0 = ax + u * 0.14 * BREAST.rx, y0 = ay + v * 0.14 * (v < 0 ? BREAST.ryDown : BREAST.ryUp); // lobes converge on the nipple
     const near = lerp(surfBack(x0, y0), surfFront(x0, y0), 0.55);
     const dir = norm(sub(tip, near));
     const side2 = norm(cross(dir, axisOut));
@@ -650,7 +659,7 @@ function buildBreast(s, ctx) {
       const t = 0.35 + 0.6 * (j / (nb - 1));
       const c = add(lerp(near, tip, t), add(mul(side2, (rand() - 0.5) * 0.008), mul(up2, (rand() - 0.5) * 0.004)));
       // keep each lobule inside the fat: limit its size by the clearance to the skin above it
-      const z0 = ctx.skinZ(c[0], c[1]), zs = z0 + skinBulge(c[0], c[1], z0)[2];
+      const zs = ctx.skinZf(c[0], c[1]);
       const r = Math.max(0.0012, Math.min(0.0032 + rand() * 0.0022, (zs - c[2] - 0.002) * 0.8));
       lobes.append(blob(c, [mul(side2, r * 1.2), mul(dir, r * 1.5), mul(up2, r * 0.8)], { u: 14, v: 10, bump: (d) => 1 + 0.16 * noise3(d[0] * 3 + k * 1.7 + j, d[1] * 3, d[2] * 3) }));
     }
@@ -659,8 +668,8 @@ function buildBreast(s, ctx) {
     const nipTip = add(apex, add(mul(axisOut, 0.0055), mul(norm(sub(near, apex)), 0.0012)));
     ducts.append(tube([lerp(near, tip, 0.85), lerp(near, tip, 0.4), near, sinus, nipTip], (t) => (t > 0.55 && t < 0.8 ? 0.0014 : 0.0007), { n: 40, seg: 8 }));
   }
-  res.push({ name: 'Mammary gland lobes', sys: 'organs', side, groups: GROUPS_BREAST.slice(1), prims: [lobes.prim('Mammary gland')] });
-  res.push({ name: 'Lactiferous ducts', sys: 'organs', side, groups: GROUPS_BREAST.slice(1), prims: [ducts.prim('Lactiferous duct')] });
+  res.push({ name: 'Mammary gland lobes', sys: 'organs', side, groups: GROUPS_BREAST.slice(1), prims: [lobes.prim('Mammary gland')], femSpace: 1 });
+  res.push({ name: 'Lactiferous ducts', sys: 'organs', side, groups: GROUPS_BREAST.slice(1), prims: [ducts.prim('Lactiferous duct')], femSpace: 1 });
   return res;
 }
 

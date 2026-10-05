@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 cd "$(dirname "$0")"
-B=../pipeline/node_modules/.bin
+B=../build/node_modules/.bin
 rm -rf dist && mkdir -p dist/data
-NODE_PATH=../pipeline/node_modules $B/esbuild src/main.js --bundle --format=esm --minify --target=es2020 --charset=ascii --outfile=dist/app.js --log-level=warning
+NODE_PATH=../build/node_modules $B/esbuild src/main.js --bundle --format=esm --minify --target=es2020 --charset=ascii --outfile=dist/app.js --log-level=warning
 cp index.html dist/index.html
 cp -r public/. dist/
-cp -r ../pipeline/out2/base ../pipeline/out2/hi ../pipeline/out2/manifest.json dist/data/
-cp ../pipeline/refs.json dist/data/refs.json
+cp -r ../build/out2/base ../build/out2/hi ../build/out2/manifest.json dist/data/
+cp ../refs.json dist/data/refs.json
 if [ "$FORMAT" = "b64" ]; then
   for f in $(cd dist/data && find base hi -name '*.mvb'); do base64 -w 0 "dist/data/$f" > "dist/data/${f%.mvb}.b64.txt"; rm "dist/data/$f"; done
   sed -i 's#<script type="module" src="app.js"></script>#<script>window.__VH_DATA_FORMAT__ = "b64";</script><script type="module" src="app.js"></script>#' dist/index.html

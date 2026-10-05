@@ -86,6 +86,7 @@ export function makeSharedUniforms() {
     uHiColor: { value: new THREE.Color('#6fe3f2') },
     uSkinA: { value: new THREE.Vector2(0.035, 0.5) }, uSkinFade: { value: 1 }, uGhostA: { value: 0.075 },
     uClipPlane: { value: new THREE.Vector4(0, 0, 1, 1e3) }, uClipMode: { value: 0 }, uCut: { value: new THREE.Vector4() }, uHover: { value: -1 }, uEye: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) },
+    uFemField: { value: null }, uFemMin: { value: new THREE.Vector3() }, uFemInv: { value: new THREE.Vector3() }, uAreola: { value: [new THREE.Vector4(), new THREE.Vector4()] },
     uKeyDir: { value: new THREE.Vector3(0, 0, 1) }, uDetail: { value: 1 },
     ...tissueUniforms(THREE),
   };
@@ -100,6 +101,7 @@ export function makeAnatomyMaterial(shared, mode, { isSkin = false, lodPass = 0 
     side: THREE.FrontSide,
   });
   mat.userData.mode = mode;
+  mat.defines = isSkin ? { FEM_ATTR: '', FEM_ABS: '' } : { FEM_ATTR: '' }; // per-vertex female offsets (skin) / corrections (others)
   const local = { uIsSkin: { value: isSkin ? 1 : 0 }, uLodPass: { value: lodPass }, uSkinSolid: { value: 0 } };
   mat.userData.local = local;
   mat.onBeforeCompile = (shader) => {
@@ -190,9 +192,10 @@ export function makeAnatomyMaterial(shared, mode, { isSkin = false, lodPass = 0 
           }
         }
         if (limbus >= 0.0) diffuseColor.rgb = pow(mix(vec3(0.16, 0.2, 0.24), vec3(0.9, 0.89, 0.87), limbus), vec3(2.2));
-        if (uIsSkin > 0.5 && uFemale >= 0.5 && uPG < 0.5 && mp.z > 0.05) {
-          float d = min(length(mp.xy - vec2(0.105, 1.262)), length(mp.xy - vec2(-0.105, 1.262)));
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.36, 0.17, 0.14), smoothstep(0.021, 0.016, d) * 0.85);
+        if (uIsSkin > 0.5 && uFemale >= 0.5 && uPG < 0.5 && uAreola[0].w > 0.0) {
+          float d = min(distance(vFemPos, uAreola[0].xyz), distance(vFemPos, uAreola[1].xyz)), r = uAreola[0].w;
+          float a = smoothstep(r, r * 0.78, d) * (0.72 + 0.12 * (nz(vFemPos * 900.0).a - 0.5) * DETAIL(900.0));
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.40, 0.21, 0.17), a);
         }
         if (capFace) {
           diffuseColor.rgb *= 0.86;
@@ -309,9 +312,10 @@ export function makeAnatomyMaterial(shared, mode, { isSkin = false, lodPass = 0 
   return mat;
 }
 
-export function makePickMaterial(shared, lodPass) {
+export function makePickMaterial(shared, lodPass, isSkin = false) {
   return new THREE.ShaderMaterial({
-    uniforms: { ...shared, uIsSkin: { value: 0 }, uLodPass: { value: lodPass } },
+    defines: isSkin ? { FEM_ATTR: '', FEM_ABS: '' } : { FEM_ATTR: '' },
+    uniforms: { ...shared, uIsSkin: { value: isSkin ? 1 : 0 }, uLodPass: { value: lodPass } },
     vertexShader: VERT_PARS + /* glsl */ `
       flat varying int vId;
       void main() {

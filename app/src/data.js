@@ -82,8 +82,35 @@ export async function decodeGeometry(raw, entry) {
   attr('aTissue', tis, 1, false);
   attr('partId', pid, 1, false);
   attr('aFlow', flow, 1, false);
+  if (entry.femBytes) { // female stream (int16, 0.1 mm): skin offsets + female normals (oct), or corrections to the field
+    const fs = 8, fb = new Uint8Array(vCount * fs);
+    MeshoptDecoder.decodeVertexBuffer(fb, vCount, fs, raw.subarray(vBytes + iBytes, vBytes + iBytes + entry.femBytes));
+    const fdv = new DataView(fb.buffer), fd = new Int16Array(vCount * 3), fn = new Int8Array(vCount * 2);
+    for (let i = 0; i < vCount; i++) { const o = i * fs; fd[i * 3] = fdv.getInt16(o, true); fd[i * 3 + 1] = fdv.getInt16(o + 2, true); fd[i * 3 + 2] = fdv.getInt16(o + 4, true); fn[i * 2] = fdv.getInt8(o + 6); fn[i * 2 + 1] = fdv.getInt8(o + 7); }
+    attr('aFemD', fd, 3, false);
+    if (entry.femAbs) attr('aFemN', fn, 2, true);
+  }
   const index = new THREE.BufferAttribute(ib, 1); index.onUpload(free);
   geo.setIndex(index);
   geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0.9, 0), 3);
   return geo;
+}
+
+// The female shape field for everything inside the body: a 3D grid of offsets (int16, 0.1 mm)
+export async function fetchFemaleField(baseUrl, entry) {
+  const url = DATA_FORMAT === 'b64' ? `${baseUrl}${entry.file.replace(/\.mvb$/, '.b64.txt')}` : `${baseUrl}${entry.file}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Could not load ${entry.file} (${res.status})`);
+  let bytes = new Uint8Array(await res.arrayBuffer());
+  if (DATA_FORMAT === 'b64') bytes = b64ToBytes(new TextDecoder().decode(bytes));
+  const raw = await gunzip(bytes);
+  const [nx, ny, nz] = entry.dims, n = nx * ny * nz, src = new Int16Array(raw.buffer, raw.byteOffset, n * 3);
+  const half = new Uint16Array(n * 4);
+  for (let i = 0; i < n; i++) { for (let a = 0; a < 3; a++) half[i * 4 + a] = THREE.DataUtils.toHalfFloat(src[i * 3 + a] * 1e-4); half[i * 4 + 3] = 0; }
+  const tex = new THREE.Data3DTexture(half, nx, ny, nz);
+  tex.format = THREE.RGBAFormat; tex.type = THREE.HalfFloatType;
+  tex.minFilter = tex.magFilter = THREE.LinearFilter;
+  tex.wrapS = tex.wrapT = tex.wrapR = THREE.ClampToEdgeWrapping;
+  tex.unpackAlignment = 1; tex.needsUpdate = true;
+  return tex;
 }

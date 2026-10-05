@@ -2,9 +2,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { createRenderer, makeNoiseTexture, makeBackground, makeSharedUniforms, makeAnatomyMaterial, makePickMaterial, Pipeline } from './render.js';
-import { fetchPack } from './data.js';
+import { fetchPack, fetchFemaleField } from './data.js';
 import { lookupInfo, prettyName } from './content.js';
-import { warpPoint } from './warp.js';
 import { Physiology, SYSTEMS as PHYS } from './physiology.js';
 import { SoundEngine } from './audio.js';
 import { TOURS } from './tours.js';
@@ -106,7 +105,7 @@ function mat(mode, isSkin, lod) {
   if (!matCache.has(k)) matCache.set(k, makeAnatomyMaterial(U, mode, { isSkin, lodPass: lod }));
   return matCache.get(k);
 }
-const pickMats = [makePickMaterial(U, 0), makePickMaterial(U, 1)];
+const pickMats = [makePickMaterial(U, 0), makePickMaterial(U, 1)], pickMatsSkin = [makePickMaterial(U, 0, true), makePickMaterial(U, 1, true)];
 const pickScene = new THREE.Scene();
 const pickTarget = new THREE.WebGLRenderTarget(1, 1);
 const pickBuf = new Uint8Array(4);
@@ -123,7 +122,7 @@ function makeMeshSet(sysId, geo, lod) {
   const main = new THREE.Mesh(geo, mat(isSkin ? 'skin' : 'opaque', isSkin, lod));
   const ghost = new THREE.Mesh(geo, mat('ghost', isSkin, lod));
   const xray = new THREE.Mesh(geo, mat('xray', isSkin, lod));
-  const pick = new THREE.Mesh(geo, pickMats[lod]);
+  const pick = new THREE.Mesh(geo, (isSkin ? pickMatsSkin : pickMats)[lod]);
   for (const m of [main, ghost, xray, pick]) m.frustumCulled = false;
   if (isSkin) main.renderOrder = 10;
   ghost.renderOrder = 5; xray.renderOrder = 20;
@@ -201,11 +200,7 @@ function skinFade(t) {
 function layerProgress(sys, t) { const L = LAYER[sys]; return ease(THREE.MathUtils.clamp((t - L.t0) / (L.t1 - L.t0), 0, 1)); }
 
 const _w = [0, 0, 0];
-function femaleCenter(p) {
-  const q = [p.c.x + p.fo[0], p.c.y + p.fo[1], p.c.z + p.fo[2]];
-  warpPoint(q, 1, p.sys === 'skin' && !(p.flags & 1), _w);
-  return new THREE.Vector3(_w[0], _w[1], _w[2]);
-}
+function femaleCenter(p) { return new THREE.Vector3(...p.cFem); } // computed by the build (female shape data)
 function partCenterNow(p, out) {
   const f = state.fT;
   out.copy(p.c).lerp(p.cF, f);
@@ -1509,8 +1504,8 @@ async function init() {
   U.uQMin.value.set(...qmin);
   U.uQScale.value.set(qmax[0] - qmin[0], qmax[1] - qmin[1], qmax[2] - qmin[2]);
   N = manifest.parts.length;
-  parts = manifest.parts.map(([id, sys, name, side, groups, c, ext, hidden, sex, anim, pivot, axis, region, flags, fo, pg]) => ({
-    id, sys, name, side, groups: groups ? groups.split('>') : [], c: new THREE.Vector3(...c), ext, hidden, sex, anim, pivot, axis, region, flags, fo, pg: pg || 0, hi: false,
+  parts = manifest.parts.map(([id, sys, name, side, groups, c, ext, hidden, sex, anim, pivot, axis, region, flags, fo, pg, cFem]) => ({
+    id, sys, name, side, groups: groups ? groups.split('>') : [], c: new THREE.Vector3(...c), ext, hidden, sex, anim, pivot, axis, region, flags, fo, pg: pg || 0, cFem: cFem || c, hi: false,
   }));
   for (const p of parts) {
     p.title = prettyName(p.name);
@@ -1534,6 +1529,12 @@ async function init() {
   U.uAnimTex.value = staticTexture((p, d, o) => { d[o] = p.anim; d[o + 1] = p.pivot[0]; d[o + 2] = p.pivot[1]; d[o + 3] = p.pivot[2]; });
   U.uAxisTex.value = staticTexture((p, d, o) => { d[o] = p.axis[0]; d[o + 1] = p.axis[1]; d[o + 2] = p.axis[2]; d[o + 3] = p.flags; });
   U.uFemTex.value = staticTexture((p, d, o) => { d[o] = p.fo[0]; d[o + 1] = p.fo[1]; d[o + 2] = p.fo[2]; d[o + 3] = p.sex + 4 * p.pg; });
+  (manifest.landmarks.areolas || []).slice(0, 2).forEach((a, i) => U.uAreola.value[i].set(...a.c, a.r));
+  if (manifest.femField) {
+    const F = manifest.femField;
+    U.uFemMin.value.set(...F.min); U.uFemInv.value.set(1 / (F.cell * F.dims[0]), 1 / (F.cell * F.dims[1]), 1 / (F.cell * F.dims[2]));
+    fetchFemaleField(DATA, F).then((tex) => { U.uFemField.value = tex; state.needsRender = true; }).catch((e) => console.warn('female shape field unavailable', e));
+  }
   (manifest.landmarks.eyes || []).slice(0, 2).forEach((e, i) => { U.uEye.value[i * 2].set(...e.c, e.pupil); U.uEye.value[i * 2 + 1].set(...e.axis, e.outer); });
   (manifest.landmarks.nipples || []).slice(0, 2).forEach((q, i) => { U.uNip.value[i * 2].set(...q.tip, q.h); U.uNip.value[i * 2 + 1].set(...q.n, q.r); });
   let pgSaved = false; try { pgSaved = localStorage.getItem('vh-pg') === '1'; } catch (e) { /* storage unavailable */ }
@@ -1576,4 +1577,4 @@ if ('serviceWorker' in navigator && !window.__VH_DATA_FORMAT__ && (location.prot
   if (ios && !standalone && !window.__VH_DATA_FORMAT__) $('#install-tip').hidden = false;
 }
 
-window.__vh = { renderer, setT, select, selectGroup, setLayer, setSkinMode, setSex, setPG, setMotion, openSection, closeSection, startTour, parts: () => parts, state, phys, camera, controls, resetView, groupIndex, view, U, pipeline, findGroupKey, updateDetail, detail };
+window.__vh = { pickAt, renderer, setT, select, selectGroup, setLayer, setSkinMode, setSex, setPG, setMotion, openSection, closeSection, startTour, parts: () => parts, state, phys, camera, controls, resetView, groupIndex, view, U, pipeline, findGroupKey, updateDetail, detail };

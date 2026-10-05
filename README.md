@@ -51,15 +51,19 @@ Esc close or deselect. Press ? for the full list in the app.
 
 ## Rebuilding
 
-The `pipeline/` scripts need the Z-Anatomy PC version and Node 20 or later.
+The `pipeline/` scripts need the Z-Anatomy PC version, MakeHuman's data files and Node 20 or later.
 
 1. In `pipeline/`, run `npm install`.
 2. Convert the Z-Anatomy FBX files (`Resources/Models/FBX/*100.fbx` and `CardioVascular41.fbx`)
    to GLB with the bundled `fbx2gltf` binary, and save them in `pipeline/glbhi/`.
-3. Run `node build2.mjs out2` to write `out2/base`, `out2/hi` and `out2/manifest.json`.
-4. Optionally, run `node refs.mjs` from a folder that contains `za/Assets/Descriptions`
+3. Get MakeHuman's data (CC0) from [makehumancommunity/makehuman](https://github.com/makehumancommunity/makehuman):
+   the `makehuman/data/targets` and `makehuman/data/rigs` folders, and the base mesh
+   `makehuman/data/3dobjs/base.obj`. Point `MH_DATA` at the `data/` folder (with a trailing slash)
+   and `MH_BASE` at `base.obj`. The female body shape is fitted from these files.
+4. Run `node build2.mjs out2` to write `out2/base`, `out2/hi` and `out2/manifest.json`.
+5. Optionally, run `node refs.mjs` from a folder that contains `za/Assets/Descriptions`
    to regenerate the atlas notes in `refs.json`.
-5. In `app/`, run `./build.sh`, then copy `app/dist/` into `docs/`.
+6. In `app/`, run `./build.sh`, then copy `app/dist/` into `docs/`.
 
 ## Credits and licenses
 
@@ -67,5 +71,8 @@ The `pipeline/` scripts need the Z-Anatomy PC version and Node 20 or later.
   built on BodyParts3D © The Database Center for Life Science (CC BY-SA 2.1 Japan). The
   converted models in `docs/data` are shared under the same CC BY-SA 4.0 license.
 - The atlas notes come from Wikipedia text bundled with Z-Anatomy (CC BY-SA).
-- The female reproductive organs, breast tissue and female body shape are modeled
+- The female body shape comes from [MakeHuman](http://www.makehumancommunity.org)'s average
+  adult man and woman (CC0). Their difference is fitted onto this body: breasts, waist, hips,
+  shoulders, limbs and face.
+- The female reproductive organs, breast tissue and the pudendal region are modeled
   procedurally from standard adult measurements. They are not scan-based.
