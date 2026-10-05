@@ -14,12 +14,16 @@ if [ "$FORMAT" = "b64" ]; then
   rm -f dist/manifest.webmanifest
   sed -i '/<link rel="manifest"/d' dist/index.html
 else
+  # content-hashed script name, so a page and its script can never come from different versions
+  H=$(sha256sum dist/app.js | cut -c1-10)
+  mv dist/app.js "dist/app.$H.js"
+  sed -i "s#<script type=\"module\" src=\"app.js\"></script>#<script type=\"module\" src=\"app.$H.js\"></script>#" dist/index.html
   # service worker with a content-hashed version and the precache list
   node -e '
     const fs = require("fs"), path = require("path"), crypto = require("crypto");
     const d = "dist";
     const list = (dir) => fs.readdirSync(path.join(d, dir)).map((f) => dir + "/" + f).sort();
-    const shell = ["./", "index.html", "app.js", "manifest.webmanifest", ...list("icons"), "data/manifest.json", "data/refs.json", ...list("data/base")];
+    const shell = ["./", "index.html", ...fs.readdirSync(d).filter((f) => /^app\.[0-9a-f]+\.js$/.test(f)), "manifest.webmanifest", ...list("icons"), "data/manifest.json", "data/refs.json", ...list("data/base")];
     const detail = list("data/hi");
     const h = crypto.createHash("sha256");
     for (const f of [...shell.slice(1), ...detail]) h.update(fs.readFileSync(path.join(d, f)));
