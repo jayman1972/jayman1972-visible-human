@@ -163,6 +163,8 @@ function closestOnSeg(c, A, B, out) {
   const s = THREE.MathUtils.clamp(_p.subVectors(c, A).dot(_ab) / _ab.lengthSq(), 0, 1);
   return out.copy(A).addScaledVector(_ab, s);
 }
+// How far apart the parts sit when fully exploded (scales every offset below).
+const SPREAD = 1.9;
 function explodeVector(p, c) {
   let best = null, bestD = Infinity;
   for (const g of REGIONS) { closestOnSeg(p.c, g.A, g.B, _q); const d = _q.distanceTo(p.c) / g.rad; if (d < bestD) { bestD = d; best = g; } }
@@ -171,10 +173,10 @@ function explodeVector(p, c) {
   _r.subVectors(c, _q);
   const pivot = g.pivot === 'a' ? g.A.clone() : g.A.clone().add(g.B).multiplyScalar(0.5);
   const L = LAYER[p.sys];
-  const qNew = pivot.clone().addScaledVector(_q.clone().sub(pivot), 1 + g.along * L.amul).add(g.OFF);
+  const qNew = pivot.clone().addScaledVector(_q.clone().sub(pivot), 1 + g.along * L.amul * SPREAD).addScaledVector(g.OFF, SPREAD);
   const rLen = _r.length();
   const rhat = rLen > 1e-3 ? _r.clone().divideScalar(rLen) : new THREE.Vector3(0, 0, 1);
-  return qNew.addScaledVector(_r, 1 + g.radial * L.rmul).addScaledVector(rhat, L.base).sub(c);
+  return qNew.addScaledVector(_r, 1 + g.radial * L.rmul * SPREAD).addScaledVector(rhat, L.base * SPREAD).sub(c);
 }
 const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
 function layerProgress(sys, t) { const L = LAYER[sys]; return ease(THREE.MathUtils.clamp((t - L.t0) / (L.t1 - L.t0), 0, 1)); }

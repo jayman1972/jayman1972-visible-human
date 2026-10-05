@@ -4,7 +4,7 @@ An interactive 3D human body for phones, tablets and desktops, in the spirit of 
 transparent "Visible Man" model kits. Take the body apart layer by layer, slice organs
 open, and watch the heart, lungs, blood, nerves and gut at work.
 
-**Live app:** https://jayman1972.github.io/visible-human/
+**Live app:** https://jayman1972.github.io/jayman1972-visible-human/
 
 On an iPhone or iPad, open the link in Safari, tap **Share**, then **Add to Home Screen**.
 It opens full screen like an app and works offline after the first visit.
