@@ -109,6 +109,13 @@ const pickScene = new THREE.Scene();
 const pickTarget = new THREE.WebGLRenderTarget(1, 1);
 const pickBuf = new Uint8Array(4);
 
+// Compile every material variant (including the hidden ghost / x-ray passes) in the background
+// soon after new meshes appear, so the first selection or isolate doesn't stall a frame.
+let prewarmTimer = 0;
+function prewarm() {
+  clearTimeout(prewarmTimer);
+  prewarmTimer = setTimeout(() => { try { renderer.compileAsync(scene, camera).catch(() => {}); } catch (e) { /* older three */ } }, 400);
+}
 function makeMeshSet(sysId, geo, lod) {
   const isSkin = sysId === 'skin';
   const main = new THREE.Mesh(geo, mat(isSkin ? 'skin' : 'opaque', isSkin, lod));
@@ -607,7 +614,7 @@ async function loadDetail(pk) {
   detail.loading.add(pk.id); updateHD();
   try {
     const geo = await fetchPack(DATA, pk);
-    const ms = makeMeshSet(pk.sys, geo, 1);
+    const ms = makeMeshSet(pk.sys, geo, 1); prewarm();
     systems[pk.sys].hi.set(pk.id, ms);
     detail.loaded.set(pk.id, { pk, vCount: pk.vCount });
     for (const id of pk.parts) parts[id].hi = true;
@@ -1142,8 +1149,12 @@ function updateViewLabel() {
 // Resize + render loop
 // ---------------------------------------------------------------------------
 let initialized = false;
+let lastW = 0, lastH = 0;
 function resize() {
   const w = stage.clientWidth, h = stage.clientHeight;
+  // resizing the canvas clears it, so ignore resize events that don't change its size
+  if (w === lastW && h === lastH) return;
+  lastW = w; lastH = h;
   const prev = initialized ? fitDistance(state.t) : 0;
   measureInsets();
   applyViewOffset();
@@ -1200,18 +1211,17 @@ function frame(now) {
     U.uKeyDir.value.copy(_keyV);
   }
   if (active) {
+    if (now - lastActive < 100) pipeline.measure(dt * 1000); // only steady movement, not the first frame
     lastActive = now;
-    pipeline.apply('motion');
-    const t0 = performance.now();
-    pipeline.render(dt);
-    pipeline.adapt(performance.now() - t0 + (dt * 1000 > 40 ? 8 : 0), now);
-    updateViewLabel();
-    state.needsRender = false;
-  } else if (state.needsRender || (pipeline.level === 'motion' && now - lastActive > 220)) {
-    pipeline.apply('still');
     pipeline.render(dt);
     updateViewLabel();
     state.needsRender = false;
+  } else if (state.needsRender) {
+    pipeline.render(dt);
+    updateViewLabel();
+    state.needsRender = false;
+  } else if (now - lastActive > 800 && pipeline.maybeAdapt()) {
+    pipeline.render(dt); // redraw in the same frame so the resized canvas is never shown blank
   }
   if (!active && now - idleDetailCheck > 400 && now - lastActive > 300) { idleDetailCheck = now; updateDetail(); }
 }
@@ -1232,7 +1242,7 @@ function ensureLoaded(id) {
   updateChips();
   loadPromises[id] = fetchPack(DATA, def, (f) => { progress[id] = f * 0.95; setProgressUI(); })
     .then((geo) => {
-      systems[id].base = makeMeshSet(id, geo, 0);
+      systems[id].base = makeMeshSet(id, geo, 0); prewarm();
       progress[id] = 1; setProgressUI(); syncVisibility(); updateChips();
     })
     .catch((err) => {
@@ -1317,4 +1327,4 @@ if ('serviceWorker' in navigator && !window.__VH_DATA_FORMAT__ && (location.prot
   if (ios && !standalone && !window.__VH_DATA_FORMAT__) $('#install-tip').hidden = false;
 }
 
-window.__vh = { setT, select, selectGroup, setLayer, setSkinMode, setSex, setPG, setMotion, openSection, closeSection, startTour, parts: () => parts, state, phys, camera, controls, resetView, groupIndex, view, U, pipeline, findGroupKey, updateDetail, detail };
+window.__vh = { renderer, setT, select, selectGroup, setLayer, setSkinMode, setSex, setPG, setMotion, openSection, closeSection, startTour, parts: () => parts, state, phys, camera, controls, resetView, groupIndex, view, U, pipeline, findGroupKey, updateDetail, detail };

@@ -314,33 +314,39 @@ export class Pipeline {
     const vig = new VignetteEffect({ offset: 0.32, darkness: 0.55 });
     this.composer.addPass(new EffectPass(camera, this.bloom, tone, vig));
     this.composer.addPass(new EffectPass(camera, smaa));
+    // One fixed configuration. Changing resolution or AO sample counts mid-gesture resizes the
+    // canvas (which clears it) and recompiles shaders, which shows up as a blank-frame flicker.
+    Object.assign(this.ao.configuration, { halfRes: true, aoSamples: 12, denoiseSamples: 8 });
+    const touch = matchMedia('(pointer: coarse)').matches;
     this.maxDPR = Math.min(window.devicePixelRatio || 1, 2);
-    this.motionScale = 0.8;
-    this.level = null; // 'still' | 'motion'
-    this.frameEMA = 16;
-    this.lastAdjust = 0;
+    this.maxPixels = touch ? 1.7e6 : 3.2e6;
+    this.scale = 1;
+    this.frameEMA = 16; this.samples = 0; this.downgrades = 0;
     this.w = 1; this.h = 1;
   }
-  setSize(w, h) { this.w = w; this.h = h; this.apply(this.level || 'still', true); }
-  apply(level, force = false) {
-    const dpr = level === 'still' ? this.maxDPR : Math.max(0.75, this.maxDPR * this.motionScale);
-    if (!force && level === this.level && Math.abs(dpr - this.renderer.getPixelRatio()) < 0.01) return;
-    this.level = level;
-    this.renderer.setPixelRatio(dpr);
-    this.renderer.setSize(this.w, this.h, false);
-    this.composer.setSize(this.w, this.h);
-    const c = this.ao.configuration;
-    if (level === 'still') { c.halfRes = false; c.aoSamples = 16; c.denoiseSamples = 8; }
-    else { c.halfRes = true; c.aoSamples = 8; c.denoiseSamples = 4; }
+  dpr() {
+    const cap = Math.sqrt(this.maxPixels / Math.max(1, this.w * this.h));
+    return Math.max(0.75, Math.min(this.maxDPR, cap) * this.scale);
   }
-  // frameMs: measured time of the last frame (used to adapt motion resolution)
-  adapt(frameMs, now) {
-    this.frameEMA = this.frameEMA * 0.9 + frameMs * 0.1;
-    if (this.level !== 'motion' || now - this.lastAdjust < 700) return;
-    let s = this.motionScale;
-    if (this.frameEMA > 24) s = Math.max(0.5, s * 0.88);
-    else if (this.frameEMA < 15 && s < 1) s = Math.min(1, s * 1.06);
-    if (Math.abs(s - this.motionScale) > 0.01) { this.motionScale = s; this.lastAdjust = now; this.apply('motion', true); }
+  // Only called on load, on a real window resize, and (rarely) by maybeAdapt while idle.
+  setSize(w, h) {
+    this.w = w; this.h = h;
+    this.renderer.setPixelRatio(this.dpr());
+    this.renderer.setSize(w, h, false);
+    this.composer.setSize(w, h);
+  }
+  // Record the interval between frames while the view is moving.
+  measure(frameMs) {
+    if (frameMs > 250) return; // a one-off stall (first use of a material), not a trend
+    this.frameEMA = this.frameEMA * 0.95 + frameMs * 0.05; this.samples++;
+  }
+  // Called while idle: if movement has been consistently slow (< ~25 fps), drop the resolution
+  // one step. Never raised again in a session, so it cannot oscillate. Returns true if resized.
+  maybeAdapt() {
+    if (this.samples < 120 || this.frameEMA < 40 || this.downgrades >= 3 || this.dpr() <= 0.8) return false;
+    this.scale *= 0.82; this.downgrades++; this.samples = 0; this.frameEMA = 24;
+    this.setSize(this.w, this.h);
+    return true;
   }
   render(dt) { this.composer.render(dt); }
 }
