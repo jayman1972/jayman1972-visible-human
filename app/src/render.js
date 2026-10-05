@@ -85,7 +85,7 @@ export function makeSharedUniforms() {
     uNoise: { value: null },
     uHiColor: { value: new THREE.Color('#6fe3f2') },
     uSkinA: { value: new THREE.Vector2(0.035, 0.5) }, uSkinFade: { value: 1 }, uGhostA: { value: 0.075 },
-    uClipPlane: { value: new THREE.Vector4(0, 0, 1, 1e3) }, uClipMode: { value: 0 }, uCut: { value: new THREE.Vector4() },
+    uClipPlane: { value: new THREE.Vector4(0, 0, 1, 1e3) }, uClipMode: { value: 0 }, uCut: { value: new THREE.Vector4() }, uHover: { value: -1 },
     uKeyDir: { value: new THREE.Vector3(0, 0, 1) }, uDetail: { value: 1 },
     ...tissueUniforms(THREE),
   };
@@ -233,6 +233,8 @@ export function makeAnatomyMaterial(shared, mode, { isSkin = false, lodPass = 0 
       if (vState > 1.5 && vState < 2.5) {
         totalEmissiveRadiance += uHiColor * (0.06 + 0.55 * fres);
         diffuseColor.rgb = mix(diffuseColor.rgb, uHiColor, 0.06);
+      } else if (abs(vPid - uHover) < 0.5) {
+        totalEmissiveRadiance += uHiColor * (0.03 + 0.3 * fres);   // part under the mouse pointer
       }`;
     f = f.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n' + emissive);
     let post = `

@@ -72,6 +72,7 @@ const controls = new OrbitControls(camera, canvas);
 controls.target.set(0, 0.88, 0);
 Object.assign(controls, { enableDamping: true, dampingFactor: 0.09, rotateSpeed: 0.75, zoomSpeed: 0.9, panSpeed: 0.8, minDistance: 0.06, maxDistance: 12, autoRotateSpeed: 1.6, screenSpacePanning: true });
 controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+canvas.style.removeProperty('cursor'); // OrbitControls sets an inline cursor; the stylesheet manages it
 
 const pipeline = new Pipeline(renderer, scene, camera);
 const U = makeSharedUniforms();
@@ -284,18 +285,33 @@ function measureInsets() {
   const W = stage.clientWidth, H = stage.clientHeight;
   const topEl = $('.top'), dockEl = $('.dock'), railEl = $('.rail-wrap');
   view.w = W; view.h = H;
+  const wide = W >= 820;
   view.top = topEl ? topEl.getBoundingClientRect().bottom + 8 : 0;
-  view.bottom = dockEl ? H - dockEl.getBoundingClientRect().top + 8 : 0;
-  view.right = railEl && W < 820 ? W - railEl.getBoundingClientRect().left : 0;
+  // the dock's layout box (ignoring the slide-away transform used on phones)
+  const dockTop = dockEl ? H - dockEl.offsetHeight : H;
+  view.bottom = H - dockTop + 8;
+  view.right = railEl && !wide ? W - railEl.getBoundingClientRect().left : 0;
   view.left = 0;
   view.baseBottom = view.bottom;
-  const panel = [...document.querySelectorAll('.bottom-panel.open')][0];
-  if (W < 820 && panel) view.bottom = Math.max(view.bottom, panel.offsetHeight + 4);
-  // keep the subject clear of the tour caption and (on wide screens) the side info sheet
+  // CSS uses these to fit the floating panels and the rail between the header and the dock
+  const root = document.documentElement.style;
+  root.setProperty('--top-space', `${Math.round(view.top + 2)}px`);
+  root.setProperty('--dock-space', `${Math.round(H - dockTop + 10)}px`);
+  const st = $('.side-tools'); if (st) root.setProperty('--side-tools-bottom', `${Math.round(st.offsetTop + st.offsetHeight)}px`);
+  const open = (id) => { const el = document.getElementById(id); return el && el.classList.contains('open') ? el : null; };
+  if (!wide) {
+    const panel = [...document.querySelectorAll('.bottom-panel.open')][0];
+    if (panel) view.bottom = Math.max(view.bottom, panel.offsetHeight + 4);
+  } else {
+    // keep the subject between the info sheet (left) and the motion / tours / slice panel (right)
+    const sh = open('sheet');
+    if (sh) view.left = Math.min(W * 0.42, 16 + sh.offsetWidth + 8);
+    const rp = open('motion') || open('tours') || open('section');
+    view.right = rp ? Math.min(W * 0.42, 76 + rp.offsetWidth + 8) : 64;
+  }
+  // keep the subject clear of the tour caption
   const tc = $('#tour-card');
   if (tc && !tc.hidden) view.top = Math.max(view.top, tc.getBoundingClientRect().bottom + 8);
-  const sh = $('#sheet');
-  if (W >= 820 && sh && sh.classList.contains('open')) view.left = Math.min(W * 0.4, sh.getBoundingClientRect().right + 8);
   view.tsx = Math.round((view.right - view.left) / 2); view.tsy = Math.round((view.bottom - view.top) / 2);
   if (view.sx === undefined) { view.sx = view.tsx; view.sy = view.tsy; }
   setOffsetFromShift();
@@ -454,7 +470,8 @@ function focusIds(ids, dirOverride = null) {
   const bottom = view.w < 820 && panel ? Math.max(view.baseBottom ?? view.bottom, panel.offsetHeight + 4) : (view.baseBottom ?? view.bottom);
   const availPx = Math.max(120, Math.min(view.w - view.left - view.right, view.h - view.top - bottom));
   const worldPerPxAt1 = 2 * Math.tan(THREE.MathUtils.degToRad(BASE_FOV) / 2) / view.h;
-  const dist = THREE.MathUtils.clamp((size * 1.9) / (availPx * worldPerPxAt1) + size / 2, 0.12, 6);
+  const margin = view.w >= 820 ? 2.3 : 1.9; // a little more breathing room on big screens
+  const dist = THREE.MathUtils.clamp((size * margin) / (availPx * worldPerPxAt1) + size / 2, 0.12, 6);
   const dir = dirOverride ? dirOverride.clone().normalize() : camera.position.clone().sub(controls.target).normalize();
   animateCamera(c, c.clone().addScaledVector(dir, dist));
 }
@@ -817,8 +834,16 @@ function updateToolbar() {
 // ---------------------------------------------------------------------------
 // Bottom panels (info sheet, motion, section, tours) — one open at a time on phones
 // ---------------------------------------------------------------------------
+const RIGHT_PANELS = ['motion', 'tours', 'section'];
 function showPanel(id) {
-  document.querySelectorAll('.bottom-panel').forEach((p) => { if (p.id !== id && p.classList.contains('open') && window.innerWidth < 820 && !(id === 'section' && p.id === 'sheet')) closePanelEl(p); });
+  const wide = window.innerWidth >= 820;
+  document.querySelectorAll('.bottom-panel').forEach((p) => {
+    if (p.id === id || !p.classList.contains('open')) return;
+    // phones: one panel at a time (a slice may sit over the info sheet); wide screens: one per side
+    if (!wide ? !(id === 'section' && p.id === 'sheet') : RIGHT_PANELS.includes(id) && RIGHT_PANELS.includes(p.id)) {
+      if (p.id === 'section') closeSection(); else closePanelEl(p);
+    }
+  });
   const el = document.getElementById(id);
   el.hidden = false;
   requestAnimationFrame(() => { el.classList.add('open'); setTimeout(() => { measureInsets(); state.needsRender = true; }, 340); });
@@ -1153,6 +1178,143 @@ canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); showToa
     down = null;
   });
 })();
+
+// ---------------------------------------------------------------------------
+// Mouse: hover labels, cursors, double-click (desktop)
+// ---------------------------------------------------------------------------
+const hoverTip = $('#hover-tip');
+const hover = { x: 0, y: 0, inside: false, dirty: false, last: 0, id: -1, dragging: false };
+function setHover(id) {
+  if (id === hover.id) return;
+  hover.id = id;
+  U.uHover.value = id;
+  canvas.classList.toggle('over-part', id >= 0);
+  if (id < 0) { hoverTip.classList.remove('show'); state.needsRender = true; return; }
+  const p = parts[id];
+  hoverTip.querySelector('.nm').textContent = p.title;
+  hoverTip.querySelector('.side').textContent = p.side === 'L' ? 'left' : p.side === 'R' ? 'right' : '';
+  hoverTip.style.setProperty('--dot', LAYER[p.sys].dot);
+  hoverTip.classList.add('show');
+  placeHoverTip();
+  state.needsRender = true;
+}
+function placeHoverTip() {
+  const w = hoverTip.offsetWidth, h = hoverTip.offsetHeight;
+  let x = hover.x + 16, y = hover.y + 18;
+  if (x + w > innerWidth - 8) x = hover.x - w - 12;
+  if (y + h > innerHeight - 8) y = hover.y - h - 12;
+  hoverTip.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+}
+canvas.addEventListener('pointermove', (e) => {
+  if (e.pointerType !== 'mouse') return;
+  hover.x = e.clientX; hover.y = e.clientY; hover.inside = true;
+  if (e.buttons) { hover.dragging = true; canvas.classList.add('dragging'); setHover(-1); return; }
+  hover.dirty = true;
+  if (hover.id >= 0) placeHoverTip();
+});
+canvas.addEventListener('pointerleave', () => { hover.inside = false; setHover(-1); });
+window.addEventListener('pointerup', () => { if (hover.dragging) { hover.dragging = false; hover.dirty = true; } canvas.classList.remove('dragging'); });
+canvas.addEventListener('pointerdown', (e) => { if (e.pointerType === 'mouse') canvas.classList.add('dragging'); });
+// called from the render loop while the view is still
+function updateHover(now) {
+  if (!hover.inside || hover.dragging || !hover.dirty || now - hover.last < 60 || !N) return;
+  hover.dirty = false; hover.last = now;
+  setHover(pickAt(hover.x, hover.y));
+}
+canvas.addEventListener('dblclick', (e) => {
+  const id = pickAt(e.clientX, e.clientY);
+  if (id >= 0) { select(id); focusIds([...selSet]); } else resetView();
+});
+
+// ---------------------------------------------------------------------------
+// Keyboard (desktop)
+// ---------------------------------------------------------------------------
+function orbitBy(yaw, pitch) {
+  const tgt = controls.target.clone(), off = camera.position.clone().sub(tgt);
+  const sph = new THREE.Spherical().setFromVector3(off);
+  sph.theta += yaw; sph.phi = THREE.MathUtils.clamp(sph.phi + pitch, 0.08, Math.PI - 0.08);
+  animateCamera(tgt, tgt.clone().add(new THREE.Vector3().setFromSpherical(sph)), 320);
+}
+function zoomBy(f) {
+  const tgt = controls.target.clone(), off = camera.position.clone().sub(tgt);
+  const d = THREE.MathUtils.clamp(off.length() * f, controls.minDistance, controls.maxDistance);
+  animateCamera(tgt, tgt.clone().add(off.setLength(d)), 260);
+}
+$('#btn-zoom-in').addEventListener('click', () => zoomBy(0.72));
+$('#btn-zoom-out').addEventListener('click', () => zoomBy(1 / 0.72));
+const SHORTCUT_TITLES = {
+  'btn-explode': 'Explode or assemble (E)', 'btn-motion': 'Motion and sound (M)', 'btn-section': 'Cross-section (C)', 'btn-tours': 'Guided tours (T)',
+  'btn-search': 'Find a body part (/)', 'btn-help': 'How to use (?)', 'btn-reset': 'Reset the view (R)', 'btn-spin': 'Spin automatically',
+  'btn-zoom-in': 'Zoom in (+)', 'btn-zoom-out': 'Zoom out (−)', 'btn-focus': 'Zoom to the selection (F)', 'btn-isolate': 'Show only the selection (I)',
+  'btn-slice': 'Slice the selection (C)', 'btn-hide': 'Hide the selection (H)', 'sex-m': 'Male body (B)', 'sex-f': 'Female body (B)',
+};
+if (matchMedia('(hover: hover) and (pointer: fine)').matches) {
+  for (const [id, t] of Object.entries(SHORTCUT_TITLES)) { const el = document.getElementById(id); if (el) el.title = t; }
+  controls.zoomToCursor = true;
+}
+function closeTopmost() {
+  if (!searchEl.hidden) { closeSearch(); return true; }
+  if (!hint.hidden) { dismissHint(); return true; }
+  if (tour.active) { endTour(); return true; }
+  if (state.clip.on) { closeSection(); return true; }
+  for (const id of ['motion', 'tours']) if (document.getElementById(id).classList.contains('open')) { hidePanel(id); return true; }
+  if (selSet.size) { clearSelection(); return true; }
+  return false;
+}
+document.addEventListener('keydown', (e) => {
+  const t = e.target, tag = t && t.tagName;
+  const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable);
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openSearch(); return; }
+  if (e.key === 'Escape') { if (closeTopmost()) e.preventDefault(); return; }
+  if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (t && t.getAttribute && t.getAttribute('role') === 'slider') return; // the explode rail handles its own keys
+  const onButton = tag === 'BUTTON';
+  const k = e.key;
+  const click = (id) => { const el = document.getElementById(id); if (el) el.click(); };
+  let handled = true;
+  switch (k) {
+    case 'ArrowLeft': orbitBy(-Math.PI / 12, 0); break;
+    case 'ArrowRight': orbitBy(Math.PI / 12, 0); break;
+    case 'ArrowUp': orbitBy(0, -Math.PI / 18); break;
+    case 'ArrowDown': orbitBy(0, Math.PI / 18); break;
+    case '+': case '=': zoomBy(0.72); break;
+    case '-': case '_': zoomBy(1 / 0.72); break;
+    case '[': animateT(Math.max(0, state.t - 0.125), 1200); break;
+    case ']': animateT(Math.min(1, state.t + 0.125), 1200); break;
+    case '/': openSearch(); break;
+    case '?': showHint(true); break;
+    default: {
+      if (onButton && (k === ' ' || k === 'Enter')) { handled = false; break; }
+      const c = k.toLowerCase();
+      if (c === 'e') click('btn-explode');
+      else if (c === 'r') resetView();
+      else if (c === 'f') { if (selSet.size) focusIds([...selSet]); }
+      else if (c === 'i') { if (selSet.size) click('btn-isolate'); }
+      else if (c === 'h') { if (selSet.size) click('btn-hide'); }
+      else if (c === 'm') click('btn-motion');
+      else if (c === 'c') click('btn-section');
+      else if (c === 't') click('btn-tours');
+      else if (c === 'b') { unlockAudio(); setSex(state.female < 0.5); }
+      else if (c === ' ') { if (!onButton) { unlockAudio(); click('motion-all'); } }
+      else if (/^[1-8]$/.test(c)) { const chip = document.querySelectorAll('#layers .chip')[+c - 1]; if (chip) chip.click(); }
+      else handled = false;
+    }
+  }
+  if (handled) { e.preventDefault(); dismissHint(); }
+});
+// search: arrow keys move through the results, Enter opens the first one
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown') { e.preventDefault(); const b = searchList.querySelector('button'); if (b) b.focus(); }
+  else if (e.key === 'Enter') { e.preventDefault(); const b = searchList.querySelector('button'); if (b) b.click(); }
+});
+searchList.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  const items = [...searchList.querySelectorAll('button')], i = items.indexOf(document.activeElement);
+  if (e.key === 'ArrowUp' && i <= 0) { searchInput.focus(); return; }
+  const next = items[Math.min(items.length - 1, Math.max(0, i + (e.key === 'ArrowDown' ? 1 : -1)))];
+  if (next) next.focus();
+});
 controls.addEventListener('change', () => { state.needsRender = true; });
 controls.addEventListener('start', () => { state.camAnim = null; });
 
@@ -1203,7 +1365,7 @@ function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - lastFrame) / 1000);
   lastFrame = now;
-  let active = false;
+  let active = false, viewMoving = false;
   if (state.anim) {
     const a = state.anim; const k = Math.min(1, (now - a.t0) / a.dur);
     setT(a.from + (a.to - a.from) * ease(k)); if (k >= 1) state.anim = null; active = true;
@@ -1228,10 +1390,11 @@ function frame(now) {
   if (state.camAnim) {
     const c = state.camAnim; const k = Math.min(1, (now - c.t0) / c.dur), e = ease(k);
     controls.target.lerpVectors(c.fromT, c.target, e); camera.position.lerpVectors(c.fromP, c.position, e);
-    if (k >= 1) state.camAnim = null; active = true;
+    if (k >= 1) state.camAnim = null; active = true; viewMoving = true;
   }
-  if (stepViewShift()) active = true;
-  if (controls.update()) active = true;
+  if (stepViewShift()) { active = true; viewMoving = true; }
+  if (controls.update()) { active = true; viewMoving = true; }
+  if (state.anim || state.fAnim || state.vel) viewMoving = true;
   if (phys.anyOn) { phys.update(dt); phys.writeUniforms(U); sound.tick(dt, phys.on); active = true; }
   updateCutaway();
   if (active || state.needsRender) {
@@ -1241,11 +1404,15 @@ function frame(now) {
   if (active) {
     if (now - lastActive < 100) pipeline.measure(dt * 1000); // only steady movement, not the first frame
     lastActive = now;
+    // while the camera or the explode moves, the label would point at the wrong thing: drop it and
+    // pick again once still (body animations alone don't move parts far, so keep tracking then)
+    if (viewMoving) { if (hover.id >= 0) setHover(-1); hover.dirty = hover.inside; } else updateHover(now);
     pipeline.render(dt);
     updateViewLabel();
     state.needsRender = false;
-  } else if (state.needsRender) {
-    pipeline.render(dt);
+  } else if (state.needsRender || hover.dirty) {
+    updateHover(now);
+    if (state.needsRender) pipeline.render(dt);
     updateViewLabel();
     state.needsRender = false;
   } else if (now - lastActive > 800 && pipeline.maybeAdapt()) {

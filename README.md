@@ -26,6 +26,20 @@ It opens full screen like an app and works offline after the first visit.
   nipples like a doll. The internal organs, including the uterus, ovaries and prostate, stay visible.
   The setting is remembered on each device.
 
+## Controls
+
+| | Phone and tablet | Desktop |
+|---|---|---|
+| Rotate | Drag | Drag, or the arrow keys |
+| Zoom | Pinch | Ctrl + scroll, trackpad pinch, the + − buttons, or the + − keys |
+| Move | Two-finger drag | Right-drag |
+| Explode | Swipe the rail on the right | Scroll, the rail, or E (and [ ] in steps) |
+| Learn about a part | Tap it | Point at it for its name; click for details; double-click to zoom to it |
+
+More keys on desktop: R reset view, / search, F focus, I isolate, H hide, M motion and sound,
+C cross-section, T tours, B switch body, 1–8 layers, Space start or stop all motion,
+Esc close or deselect. Press ? for the full list in the app.
+
 ## Repository layout
 
 | Folder | Contents |
