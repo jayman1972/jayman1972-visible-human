@@ -60,7 +60,7 @@ export const TOURS = [
     kicker: 'Reproduction', title: 'Two bodies',
     blurb: 'Compare the male and female reproductive systems and morph between the two.',
     steps: [
-      { title: 'The male system', text: 'The testes make sperm and testosterone. The prostate and seminal glands add fluid that nourishes the sperm.', female: false, skin: 'clear', layers: { ...ORGANS_ONLY, skeleton: true }, motion: [], explode: 0, group: 'organs|Male genital system' },
+      { title: 'The male system', text: 'The testes make sperm and testosterone. The prostate and seminal glands add fluid that nourishes the sperm.', pgText: 'Deep in the pelvis, the prostate and seminal glands add fluid that nourishes sperm. Ken mode hides the external parts.', female: false, skin: 'clear', layers: { ...ORGANS_ONLY, skeleton: true }, motion: [], explode: 0, group: 'organs|Male genital system' },
       { title: 'The female system', text: 'The ovaries hold eggs and make estrogen and progesterone. The uterus, a muscular organ about the size of a pear, can stretch to hold a full-term baby.', female: true, group: 'organs|Female genital system' },
       { title: 'Inside the uterus', text: 'A slice shows the thick muscular wall and the lining (endometrium) that thickens and sheds each menstrual cycle.', female: true, part: ['Uterus'], clip: { axis: 'sagittal', pos: 0.02 } },
       { title: 'The pelvis is different too', text: 'A wider pelvis with a rounder opening makes childbirth possible. Watch the body change shape as it morphs.', female: true, skin: 'clear', layers: { ...ORGANS_ONLY, skeleton: true }, view: { target: [0, 0.88, 0], dir: [0, 0.15, 1], dist: 1.1 } },

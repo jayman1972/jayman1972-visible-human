@@ -247,7 +247,8 @@ export function femaleParts(ctx) {
   // ---- External genitalia, positioned along the shaped pudendal cleft ----
   const vul = ctx.urogenitalSkin ? buildVulvaSkin(ctx.urogenitalSkin, ctx.otherSkin || []) : null;
   if (vul) {
-    part('Pudendal region (female)', 'skin', ['Regions of human body', 'Regions of perineum'], vul.skin, 'Skin', {});
+    // the smooth fill doubles as the doll-mode crotch for both bodies (pg 2)
+    part('Pudendal region', 'skin', ['Regions of human body', 'Regions of perineum'], vul.skin, 'Skin', { pg: 2 });
     for (const s of [1, -1]) {
       const minora = new Mesh();
       const n = 44, rows = 6, idx = [];
@@ -296,7 +297,7 @@ export function femaleParts(ctx) {
       const last = keep[keep.length - 1];
       const pts = [...keep, lerp(last, end, 0.5), end];
       const mat = pv.sys === 'nerves' ? 'Nerve' : pv.mat;
-      part(pv.name, pv.sys, ['_', ...pv.groups], tube(pts, Math.min(pv.radius, 0.0018), { n: 90, seg: 10 }), mat, { side: pv.side });
+      part(pv.name, pv.sys, ['_', ...pv.groups], tube(pts, Math.min(pv.radius, 0.0018), { n: 90, seg: 10 }), mat, { side: pv.side, pg: 2 });
     }
     A.introitus = intro.p;
   } else {
@@ -333,6 +334,9 @@ export function femaleParts(ctx) {
       }
     }
   }
+  // genital structures that the doll modes hide (pg 1)
+  for (const q of out) if (/^(Labium minus|Glans of clitoris|Body and crura of clitoris|Bulb of vestibule|Greater vestibular gland|Vagina|Nipple)$/.test(q.name)) q.pg = 1;
+  out.protrudes = vul ? vul.protrudes : null;
   return out;
 }
 
@@ -405,6 +409,7 @@ function buildVulvaSkin(maleParts, otherSkin) {
   const toParam = (p) => [p[0], Math.atan2(p[1] - yc, p[2] - zc)];
   const rOf = (p) => Math.hypot(p[1] - yc, p[2] - zc);
   const m = new Mesh();
+  let fieldAt = null, inDomain = null;
   for (const bnd0 of contours) {
     // densify the contour so the fill has no long fans at the rim (T-junctions are hidden by the skirt)
     const bnd = [];
@@ -489,6 +494,7 @@ function buildVulvaSkin(maleParts, otherSkin) {
         for (const [di, dj, w] of [[0, 0, (1 - u) * (1 - v)], [1, 0, u * (1 - v)], [0, 1, (1 - u) * v], [1, 1, u * v]]) { const k = (j + dj) * NX + i + di; if (kind[k] && w > 0) { sw += w; sr += w * val[k]; } }
         return sw ? sr / sw : nearestB(q)[1];
       };
+      fieldAt = at2; inDomain = inside;
       for (let i = nB; i < nV; i++) { const [d, rb] = nearestB(pts2[i]); const w = Math.min(1, Math.max(0, (d - 0.6) / 1.6)); R[i] = rb + (at2(pts2[i]) - rb) * w * w * (3 - 2 * w); }
     }
     const base = m.P.length / 3;
@@ -537,7 +543,36 @@ function buildVulvaSkin(maleParts, otherSkin) {
   const at = (f, extra = 0) => grooveAt(thAt(f), extra);
   console.log('pudendal cleft length', (len * 100).toFixed(1), 'cm; contour verts', contours.map((c) => c.length).join('+'), 'fill tris', m.I.length / 3);
   for (const f of [0, 0.15, 0.42, 0.64, 1]) console.log('  cleft', f, at(f).p.map((v) => v.toFixed(3)).join(','));
-  return { skin: m, grooveAt, at, radiusAt };
+  // Doll modes: does a point stick out past the smooth crotch (the fill plus the surrounding skin)?
+  const allT = [];
+  for (const { P: P2, I: I2 } of otherSkin) for (let t = 0; t < I2.length; t += 3) {
+    const a = I2[t] * 3, b = I2[t + 1] * 3, c = I2[t + 2] * 3;
+    const cx = (P2[a] + P2[b] + P2[c]) / 3, cy = (P2[a + 1] + P2[b + 1] + P2[c + 1]) / 3, cz = (P2[a + 2] + P2[b + 2] + P2[c + 2]) / 3;
+    if (Math.abs(cx) > 0.1 || cy < 0.62 || cy > 0.97 || cz < -0.12) continue;
+    allT.push([P2[a], P2[a + 1], P2[a + 2], P2[b] - P2[a], P2[b + 1] - P2[a + 1], P2[b + 2] - P2[a + 2], P2[c] - P2[a], P2[c + 1] - P2[a + 1], P2[c + 2] - P2[a + 2]]);
+  }
+  const firstExit = (x, th) => {
+    const dy = Math.sin(th), dz = Math.cos(th); let best = Infinity;
+    for (const T of allT) {
+      const px = dy * T[8] - dz * T[7], py = dz * T[6], pz = -dy * T[6];
+      const det = T[3] * px + T[4] * py + T[5] * pz; if (Math.abs(det) < 1e-14) continue;
+      const inv = 1 / det, sx = x - T[0], sy = yc - T[1], sz = zc - T[2];
+      const u = (sx * px + sy * py + sz * pz) * inv; if (u < 0 || u > 1) continue;
+      const qx = sy * T[5] - sz * T[4], qy = sz * T[3] - sx * T[5], qz = sx * T[4] - sy * T[3];
+      const v = (dy * qy + dz * qz) * inv; if (v < 0 || u + v > 1) continue;
+      const t = (T[6] * qx + T[7] * qy + T[8] * qz) * inv;
+      if (t > 0.02 && t < best) best = t;
+    }
+    return best;
+  };
+  const protrudes = (p, tol = 0.003) => {
+    if (Math.abs(p[0]) > 0.06 || p[1] < 0.66 || p[1] > 0.88 || p[2] < -0.03) return false;
+    const dy = p[1] - yc, dz = p[2] - zc, r = Math.hypot(dy, dz), q = [p[0], Math.atan2(dy, dz)];
+    if (inDomain && inDomain(q)) return r > fieldAt(q) + tol;
+    const rb = firstExit(q[0], q[1]);
+    return Number.isFinite(rb) && r > rb + tol;
+  };
+  return { skin: m, grooveAt, at, radiusAt, protrudes };
 }
 
 // ---------------------------------------------------------------------------

@@ -78,6 +78,7 @@ export function warpPoint(p, f, skin = false, out = [0, 0, 0]) {
 
 export const WARP_GLSL = /* glsl */ `
 uniform float uFemale;
+uniform float uPG;      // 1 = doll mode (Ken / Barbie): genitals smoothed over
 float wg(float y, float y0, float s) { float t = (y - y0) / s; return exp(-t * t); }
 float wsclamp(float v, float c) { return c * tanh(v / c); }
 float vulvaAmount(float x, float th) {
@@ -88,7 +89,7 @@ float vulvaAmount(float x, float th) {
   float groove = exp(-b * b) * 0.0075 * along;
   float c = (th - ${VULVA.mons.toFixed(4)}) / 0.22; float e = x / 0.03;
   float mons = exp(-c * c) * exp(-e * e) * 0.007;
-  return lab + mons - groove;
+  return (lab - groove) * (1.0 - uPG) + mons;
 }
 // 0..1 inside the pudendal cleft: used to occlude light in the crevice
 float vulvaCavity(vec3 p) {
@@ -98,7 +99,7 @@ float vulvaCavity(vec3 p) {
   float th = atan(dy, dz);
   float along = smoothstep(${(VULVA.bot - 0.04).toFixed(4)}, ${(VULVA.bot + 0.18).toFixed(4)}, th) * (1.0 - smoothstep(${(VULVA.top - 0.08).toFixed(4)}, ${(VULVA.top + 0.08).toFixed(4)}, th));
   float b = p.x / 0.0034;
-  return exp(-b * b) * along * smoothstep(0.03, 0.04, r) * (1.0 - smoothstep(0.1, 0.12, r));
+  return exp(-b * b) * along * smoothstep(0.03, 0.04, r) * (1.0 - smoothstep(0.1, 0.12, r)) * (1.0 - uPG);
 }
 vec3 skinBulge(vec3 p) {
   vec3 d = vec3(0.0);
@@ -139,7 +140,24 @@ vec3 warpProportions(vec3 p) {
   dx -= sign(p.x) * 0.014 * sh;
   return vec3(p.x + dx, p.y, p.z + dz) * ${FEMALE_SCALE.toFixed(4)};
 }
+// Doll modes: press the nipples flat (uNip = [tip.xyz, height above the chest], [normal.xyz, radius] per side)
+uniform vec4 uNip[4];
+vec3 dollFlatten(vec3 p) {
+  for (int i = 0; i < 2; i++) {
+    vec4 a = uNip[i * 2], b = uNip[i * 2 + 1];
+    if (a.w <= 0.0) continue;
+    // replace the nipple (bump and the crease around it) with the smooth chest surface:
+    // the tangent plane under the tip, curving away with the chest (radius ~10 cm)
+    vec3 d = p - (a.xyz - b.xyz * a.w); float h = dot(d, b.xyz);
+    if (abs(h) > 0.015) continue;
+    float rr = length(d - b.xyz * h);
+    float w = 1.0 - smoothstep(0.6 * b.w, b.w, rr);
+    p -= b.xyz * (h + rr * rr * 5.0) * w * uPG;
+  }
+  return p;
+}
 vec3 warpPoint(vec3 p, bool skin) {
+  if (skin && uPG > 0.0) p = dollFlatten(p);
   if (uFemale <= 0.0) return p;
   vec3 q = p;
   if (skin) q += skinBulge(p);

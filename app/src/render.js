@@ -79,7 +79,7 @@ export function makeSharedUniforms() {
   return {
     uPartTex: { value: null }, uAnimTex: { value: null }, uAxisTex: { value: null }, uFemTex: { value: null },
     uTexW: { value: 64 }, uQScale: { value: new THREE.Vector3() }, uQMin: { value: new THREE.Vector3() },
-    uFemale: { value: 0 }, uTime: { value: 0 },
+    uFemale: { value: 0 }, uPG: { value: 0 }, uNip: { value: [new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4()] }, uTime: { value: 0 },
     uHeart: { value: new THREE.Vector4() }, uBreath: { value: new THREE.Vector4() },
     uAnimA: { value: new THREE.Vector4() }, uAnimB: { value: new THREE.Vector4() }, uBladder: { value: 0 },
     uNoise: { value: null },
@@ -150,7 +150,7 @@ export function makeAnatomyMaterial(shared, mode, { isSkin = false, lodPass = 0 
           vec3 q = mp - ax * dot(mp, ax) * 0.95;
           diffuseColor.rgb *= mix(1.0, mix(0.9, 1.06, nz(q * 300.0).a), DETAIL(300.0));
         }
-        if (uIsSkin > 0.5 && uFemale >= 0.5 && mp.z > 0.05) {
+        if (uIsSkin > 0.5 && uFemale >= 0.5 && uPG < 0.5 && mp.z > 0.05) {
           float d = min(length(mp.xy - vec2(0.105, 1.262)), length(mp.xy - vec2(-0.105, 1.262)));
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.36, 0.17, 0.14), smoothstep(0.021, 0.016, d) * 0.85);
         }

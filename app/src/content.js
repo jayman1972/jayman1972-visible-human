@@ -1534,6 +1534,9 @@ add(['mammary gland lobes', 'mammary gland'],
 add(['lactiferous ducts'],
   'Lactiferous ducts are milk ducts that run from each lobe to the nipple, widening into small reservoirs just behind it.',
   'They carry milk from the glands to openings on the nipple.');
+add(['pudendal region'],
+  'The pudendal region is the skin and fat between the upper thighs, from the pubic mound at the front to just in front of the anus. It covers the external genitals.',
+  'The mons pubis, a cushion of fat over the pubic bone, protects the joint beneath it. In females the skin folds into the labia majora.');
 add(['nipple'],
   'The nipple is the raised tip of the breast, surrounded by the darker skin of the areola.',
   'In females it is where milk ducts open; small glands in the areola keep the skin moist.');

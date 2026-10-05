@@ -499,16 +499,30 @@ for (const sys of SYSTEMS) {
   }
   const FANIM = { uterus: ANIM.uterus, tube: ANIM.tube, ovary: ANIM.ovary, urinary: ANIM.urinary };
   const otherSkin = skinParts.filter((p) => !/^Urogenital region$/.test(p.name)).map((p) => ({ P: p.mesh.P, I: p.mesh.I }));
-  for (const fp of femaleParts({ skinZ, muscleZ, urogenitalSkin, vesselPaths, otherSkin, pudendal })) {
+  const fparts = femaleParts({ skinZ, muscleZ, urogenitalSkin, vesselPaths, otherSkin, pudendal });
+  for (const fp of fparts) {
     const mesh = weldPart(fp.prims, fp.sys, fp.name);
     if (mesh.I.length < 3) continue;
     let mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9];
     for (let k = 0; k < mesh.P.length; k += 3) for (let a = 0; a < 3; a++) { const v = mesh.P[k + a]; if (v < mn[a]) mn[a] = v; if (v > mx[a]) mx[a] = v; }
     const mainCat = cat(fp.prims[0].mat);
     const anim = typeof fp.anim === 'string' ? FANIM[fp.anim] : fp.sys === 'vessels' ? (mainCat === 'Vein' ? ANIM.vein : ANIM.artery) : undefined;
-    allParts.push({ id: gid++, sys: fp.sys, name: fp.name, side: fp.side || null, groups: fp.groups, mesh, mn, mx, c: mn.map((v, i) => (v + mx[i]) / 2), ext: mx.map((v, i) => v - mn[i]), mainCat, ratio: fp.sys === 'skin' ? 1.0 : 0.6, hidden: false, sex: 2, anim, noBulge: fp.noBulge || 0 });
+    allParts.push({ id: gid++, sys: fp.sys, name: fp.name, side: fp.side || null, groups: fp.groups, mesh, mn, mx, c: mn.map((v, i) => (v + mx[i]) / 2), ext: mx.map((v, i) => v - mn[i]), mainCat, ratio: fp.sys === 'skin' ? 1.0 : 0.6, hidden: false, sex: 2, anim, noBulge: fp.noBulge || 0, pg: fp.pg || 0 });
   }
   console.log('female parts', allParts.filter((p) => p.sex === 2).length);
+  // Ken mode: hide the male genital skin and every structure that reaches outside the smooth crotch
+  ug.forEach((p) => { p.pg = 1; });
+  if (fparts.protrudes) {
+    const flagged = [];
+    for (const p of allParts) {
+      if (p.sys === 'skin' || p.sex === 2) continue;
+      if (p.mx[1] < 0.66 || p.mn[1] > 0.88 || p.mn[0] > 0.06 || p.mx[0] < -0.06) continue;
+      const P = p.mesh.P, n = P.length / 3; let k = 0;
+      for (let i = 0; i < P.length; i += 3) if (fparts.protrudes([P[i], P[i + 1], P[i + 2]])) k++;
+      if (k >= 6 && k / n >= 0.01) { p.pg = 1; flagged.push(`${p.sys}:${p.name}${p.side ? '.' + p.side : ''} (${(100 * k / n).toFixed(0)}%)`); }
+    }
+    console.log('ken mode hides', flagged.length, 'parts:', flagged.join(', '));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -597,6 +611,64 @@ function refineMesh(mesh, wantSplit) {
   });
   recs.forEach((r, k) => { r.p.mesh.N[r.i * 3] = newN[k][0]; r.p.mesh.N[r.i * 3 + 1] = newN[k][1]; r.p.mesh.N[r.i * 3 + 2] = newN[k][2]; });
   console.log(`skin border normals: ${fixed} of ${recs.length} border vertices blended`);
+  // The pudendal fill meets its neighbours at a slight crease: feather its normals toward the
+  // neighbouring skin over ~12 mm so it shades as one surface (it is a smooth doll crotch in Ken mode).
+  {
+    const patch = allParts.find((p) => p.sys === 'skin' && p.name === 'Pudendal region');
+    if (patch) {
+      const M = patch.mesh, cnt = new Map();
+      for (let t = 0; t < M.I.length; t += 3) for (const [u, v] of [[M.I[t], M.I[t + 1]], [M.I[t + 1], M.I[t + 2]], [M.I[t + 2], M.I[t]]]) { const k = u < v ? u + ':' + v : v + ':' + u; cnt.set(k, (cnt.get(k) || 0) + 1); }
+      const border = new Set(); for (const [k, n] of cnt) if (n === 1) { const [u, v] = k.split(':'); border.add(+u); border.add(+v); }
+      const others = allParts.filter((p) => p.sys === 'skin' && p !== patch && p.sex !== 1 && p.mx[1] > 0.66 && p.mn[1] < 0.95 && Math.abs(p.c[0]) < 0.2);
+      const bpts = [];
+      for (const i of border) {
+        const q = [M.P[i * 3], M.P[i * 3 + 1], M.P[i * 3 + 2]]; let best = null, bd = 0.004;
+        for (const o of others) { const P = o.mesh.P; for (let k = 0; k < P.length; k += 3) { const d = Math.hypot(P[k] - q[0], P[k + 1] - q[1], P[k + 2] - q[2]); if (d < bd) { bd = d; best = [o.mesh.N[k], o.mesh.N[k + 1], o.mesh.N[k + 2]]; } } }
+        if (best) bpts.push({ q, n: best });
+      }
+      for (let i = 0; i < M.P.length / 3; i++) {
+        let bd = Infinity, bn = null;
+        for (const b of bpts) { const d = Math.hypot(M.P[i * 3] - b.q[0], M.P[i * 3 + 1] - b.q[1], M.P[i * 3 + 2] - b.q[2]); if (d < bd) { bd = d; bn = b.n; } }
+        if (!bn) continue;
+        const w0 = Math.min(1, bd / 0.012), w = w0 * w0 * (3 - 2 * w0);
+        const n = [0, 1, 2].map((a) => bn[a] * (1 - w) + M.N[i * 3 + a] * w), l = Math.hypot(...n) || 1;
+        for (let a = 0; a < 3; a++) M.N[i * 3 + a] = n[a] / l;
+      }
+      console.log(`pudendal patch: feathered normals from ${bpts.length} rim points`);
+    }
+  }
+}
+// Male nipples (part of the mammary skin): a plane through the surrounding ring lets the doll
+// modes flatten them in the shader.
+const nipples = [];
+for (const side of ['L', 'R']) {
+  const m = allParts.find((p) => p.sys === 'skin' && p.name === 'Mammary region' && p.side === side);
+  if (!m) continue;
+  // the tip: the vertex that stands highest (along its normal) above its one-ring neighbours
+  const P = m.mesh.P, N = m.mesh.N, I = m.mesh.I, adj = Array.from({ length: P.length / 3 }, () => new Set());
+  for (let t = 0; t < I.length; t += 3) { adj[I[t]].add(I[t + 1]).add(I[t + 2]); adj[I[t + 1]].add(I[t]).add(I[t + 2]); adj[I[t + 2]].add(I[t]).add(I[t + 1]); }
+  let tip = null, bestH = -1;
+  for (let i = 0; i < adj.length; i++) {
+    const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
+    if (Math.abs(x) < 0.07 || Math.abs(x) > 0.16 || y < 1.18 || y > 1.34 || adj[i].size < 4) continue;
+    const c = [0, 0, 0]; for (const j of adj[i]) for (let a2 = 0; a2 < 3; a2++) c[a2] += P[j * 3 + a2] / adj[i].size;
+    const h = (x - c[0]) * N[i * 3] + (y - c[1]) * N[i * 3 + 1] + (z - c[2]) * N[i * 3 + 2];
+    if (h > bestH) { bestH = h; tip = [x, y, z]; }
+  }
+  // smooth chest around it: least-squares quadratic z(x, y) through the skin 8-25 mm away
+  const ring = [];
+  for (const o of allParts) { if (o.sys !== 'skin' || o.sex) continue; const Q = o.mesh.P; for (let k = 0; k < Q.length; k += 3) { const d = Math.hypot(Q[k] - tip[0], Q[k + 1] - tip[1]); if (d > 0.008 && d < 0.025 && Q[k + 2] > tip[2] - 0.04) ring.push([Q[k] - tip[0], Q[k + 1] - tip[1], Q[k + 2]]); } }
+  const A = Array.from({ length: 6 }, () => new Float64Array(7));
+  for (const [x, y, z] of ring) { const f = [1, x, y, x * x, x * y, y * y]; for (let i = 0; i < 6; i++) { for (let j = 0; j < 6; j++) A[i][j] += f[i] * f[j]; A[i][6] += f[i] * z; } }
+  for (let i = 0; i < 6; i++) A[i][i] += 1e-12;
+  for (let i = 0; i < 6; i++) { let piv = i; for (let r = i + 1; r < 6; r++) if (Math.abs(A[r][i]) > Math.abs(A[piv][i])) piv = r; [A[i], A[piv]] = [A[piv], A[i]]; for (let r = 0; r < 6; r++) if (r !== i) { const f = A[r][i] / A[i][i]; for (let c = i; c < 7; c++) A[r][c] -= f * A[i][c]; } }
+  const co = A.map((row, i) => row[6] / row[i]);
+  const H = tip[2] - co[0];               // tip height above the smooth surface (along z)
+  const n = [-co[1], -co[2], 1], l = Math.hypot(...n);
+  nipples.push({ side, tip: tip.map((v) => +v.toFixed(4)), n: n.map((v) => +(v / l).toFixed(4)), h: +Math.max(0, H * (1 / l) * 1.0).toFixed(4), r: 0.024 });
+  console.log(`male nipple ${side}: tip ${tip.map((v) => v.toFixed(3))}, height above the chest ${(H * 1000).toFixed(1)} mm, ring ${ring.length}`);
+}
+{
   for (const p of allParts) if (p.mesh.P.length) { const P = p.mesh.P; let mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9]; for (let k = 0; k < P.length; k += 3) for (let a = 0; a < 3; a++) { mn[a] = Math.min(mn[a], P[k + a]); mx[a] = Math.max(mx[a], P[k + a]); } p.mn = mn; p.mx = mx; }
 }
 
@@ -689,9 +761,9 @@ console.log('hi packs', manifest.packs.length, (hiBytes / 1e6).toFixed(1), 'MB')
 
 const r4 = (v) => +v.toFixed(4);
 const FEMALE_OFFSET = { 'Urinary bladder': [0, -0.006, 0.012], 'Sigmoid colon': [0, 0.004, -0.01] };
-manifest.partFields = ['id', 'sys', 'name', 'side', 'groups', 'center', 'extent', 'hidden', 'sex', 'anim', 'pivot', 'axis', 'region', 'flags', 'femaleOffset'];
-manifest.parts = allParts.map((p) => [p.id, p.sys, p.name, p.side, p.groups.join('>'), p.c.map(r4), p.ext.map(r4), p.hidden ? 1 : 0, p.sex, p.anim, p.pivot.map(r4), p.axis.map((v) => +v.toFixed(3)), p.region, p.noBulge || 0, (FEMALE_OFFSET[p.name] || [0, 0, 0])]);
-manifest.landmarks = { aorticValve, pulmValve, rightAtrium, leftAtrium };
+manifest.partFields = ['id', 'sys', 'name', 'side', 'groups', 'center', 'extent', 'hidden', 'sex', 'anim', 'pivot', 'axis', 'region', 'flags', 'femaleOffset', 'pg'];
+manifest.parts = allParts.map((p) => [p.id, p.sys, p.name, p.side, p.groups.join('>'), p.c.map(r4), p.ext.map(r4), p.hidden ? 1 : 0, p.sex, p.anim, p.pivot.map(r4), p.axis.map((v) => +v.toFixed(3)), p.region, p.noBulge || 0, (FEMALE_OFFSET[p.name] || [0, 0, 0]), p.pg || 0]);
+manifest.landmarks = { aorticValve, pulmValve, rightAtrium, leftAtrium, nipples };
 fs.writeFileSync(`${OUT}/manifest.json`, JSON.stringify(manifest));
 let baseBytes = 0; for (const s of manifest.systems) baseBytes += s.bytes;
 console.log('parts', allParts.length, 'base total', (baseBytes / 1e6).toFixed(1), 'MB', 'manifest', fs.statSync(`${OUT}/manifest.json`).size);

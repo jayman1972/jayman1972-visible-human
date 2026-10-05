@@ -105,8 +105,11 @@ void anatomyVertex(out vec3 outPos, inout vec3 n, out float cull) {
   float hi = floor(pd.w / 10.0 + 0.001);
   float st = pd.w - hi * 10.0;
   vState = st;
-  float sex = fd.w;
-  bool sexHidden = (sex > 0.5 && sex < 1.5 && uFemale >= 0.5) || (sex > 1.5 && uFemale < 0.5);
+  float pgc = floor(fd.w / 4.0 + 0.01);           // doll-mode class: 1 hide, 2 always show
+  float sex = fd.w - pgc * 4.0;
+  bool dolls = uPG >= 0.5;
+  bool sexHidden = (dolls && pgc > 0.5 && pgc < 1.5) ||
+    (!(dolls && pgc > 1.5) && ((sex > 0.5 && sex < 1.5 && uFemale >= 0.5) || (sex > 1.5 && uFemale < 0.5)));
   bool lodHidden = (hi > 0.5) != (uLodPass > 0.5);
   cull = (st < 0.5 || sexHidden || lodHidden) ? 1.0 : 0.0;
   vec3 p = position * uQScale + uQMin;
@@ -116,7 +119,7 @@ void anatomyVertex(out vec3 outPos, inout vec3 n, out float cull) {
   bool skin = uIsSkin > 0.5 && mod(xd.w, 2.0) < 0.5;
   vec3 pw = warpPoint(p, skin);
   vCavity = skin ? uFemale * vulvaCavity(p) : 0.0;
-  if (uFemale > 0.0) {
+  if (uFemale > 0.0 || (skin && uPG > 0.0)) {
     vec3 t1 = normalize(abs(n.y) < 0.9 ? cross(n, vec3(0.0, 1.0, 0.0)) : cross(n, vec3(1.0, 0.0, 0.0)));
     vec3 t2 = cross(n, t1);
     float e = 0.001;
@@ -162,6 +165,7 @@ float cutaway(vec3 wp) {
   float rad = length(toF - dir * along) * dC / max(along, 1e-4);
   return smoothstep(uCut.w, uCut.w * 1.14, rad);
 }
+uniform float uPG;
 uniform vec3 uKeyDir;   // view space
 uniform float uDetail;  // 0..1 procedural detail strength
 varying vec3 vMalePos;

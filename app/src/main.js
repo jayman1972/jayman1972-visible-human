@@ -86,7 +86,7 @@ let partState, userHidden, defaultHidden;
 let selSet = new Set();
 const groupIndex = new Map();
 const state = {
-  t: 0, tShown: -1, vel: 0, anim: null, selected: -1, selGroup: null, isolated: false, skinMode: 'clear',
+  t: 0, tShown: -1, vel: 0, anim: null, selected: -1, selGroup: null, isolated: false, skinMode: 'clear', pg: false, pgAnim: null,
   spin: false, needsRender: true, camAnim: null,
   female: 0, fT: 0, fAnim: null,
   clip: { on: false, scope: 'part', axis: 'sagittal', pos: 0, flip: false },
@@ -328,7 +328,12 @@ function resetView() { const { tgt, pos } = homePose(); animateCamera(tgt, pos);
 // ---------------------------------------------------------------------------
 // Selection / visibility
 // ---------------------------------------------------------------------------
-function sexOk(p) { return p.sex === 0 || (p.sex === 1 && state.female < 0.5) || (p.sex === 2 && state.female >= 0.5); }
+// Is this part in the body being shown? Doll mode (Ken / Barbie) hides the genitals (pg 1)
+// and shows the smoothed-over replacements (pg 2) in both bodies.
+function sexOk(p) {
+  if (state.pg) { if (p.pg === 1) return false; if (p.pg === 2) return true; }
+  return p.sex === 0 || (p.sex === 1 && state.female < 0.5) || (p.sex === 2 && state.female >= 0.5);
+}
 function recomputeStates() {
   for (let i = 0; i < N; i++) {
     let s = 1;
@@ -448,9 +453,33 @@ function setSex(female) {
   $('#sex-m').setAttribute('aria-pressed', female ? 'false' : 'true');
   $('#sex-f').setAttribute('aria-pressed', female ? 'true' : 'false');
   $('#sex-toggle').dataset.sex = female ? 'f' : 'm';
+  syncPGButton();
   sound.morph();
   if (searchEl && !searchEl.hidden) renderSearch(searchInput.value);
 }
+
+// ---------------------------------------------------------------------------
+// Doll mode ("Ken mode" / "Barbie mode"): a family-friendly view with the genitals smoothed over
+function pgName() { return state.female >= 0.5 ? 'Barbie mode' : 'Ken mode'; }
+function syncPGButton() {
+  const b = $('#pg-toggle'); if (!b) return;
+  b.setAttribute('aria-pressed', state.pg ? 'true' : 'false');
+  b.querySelector('.lbl').textContent = pgName();
+  b.title = state.pg ? `${pgName()} is on: genitals are smoothed over, like a doll` : `Turn on ${pgName()}: a family-friendly view with the genitals smoothed over`;
+}
+function setPG(on, { quiet = false } = {}) {
+  on = !!on;
+  if (state.pg === on && !quiet) return;
+  state.pg = on;
+  try { localStorage.setItem('vh-pg', on ? '1' : '0'); } catch (e) { /* storage unavailable */ }
+  state.pgAnim = { from: U.uPG.value, to: on ? 1 : 0, t0: performance.now(), dur: quiet ? 1 : 700 };
+  if ([...selSet].some((i) => !sexOk(parts[i]))) clearSelection();
+  syncPGButton();
+  if (searchEl && !searchEl.hidden) renderSearch(searchInput.value);
+  state.needsRender = true;
+  if (!quiet) { sound.toggle(on); showToast(on ? `${pgName()} on: the genitals are smoothed over, like a doll.` : `${pgName()} off: full anatomy.`); }
+}
+$('#pg-toggle').addEventListener('click', () => { unlockAudio(); setPG(!state.pg); });
 
 // ---------------------------------------------------------------------------
 // Cross-sections
@@ -806,6 +835,7 @@ function openSheet(p) {
   setSheetHead(p.sys, p.side, p.title, crumbs, sizeText(p.ext));
   let html = infoHtml(info, p.name) || `<p class="lede">${escapeHtml(p.title)} belongs to the ${escapeHtml(SYS_NOUN[p.sys].toLowerCase())}.</p>`;
   if (p.modeled) html += `<p class="modeled">Modeled from standard adult measurements, not from scan data.</p>`;
+  if (state.pg && p.pg === 2) html += `<p class="modeled">${pgName()} is on, so the genitals are smoothed over here.</p>`;
   if (crumbs) html += `<p class="hint-line">Tap a name above the title to select the whole structure it belongs to.</p>`;
   $('#sheet-body').innerHTML = html;
   if (!refs) loadRefs().then(() => { if (state.selected === p.id) openSheet(p); });
@@ -944,7 +974,7 @@ function runStep() {
   const s = T.steps[tour.step];
   $('#tc-kicker').textContent = `${T.title} · ${tour.step + 1} of ${T.steps.length}`;
   $('#tc-title').textContent = s.title;
-  $('#tc-text').textContent = s.text;
+  $('#tc-text').textContent = state.pg && s.pgText ? s.pgText : s.text;
   $('#tc-prev').disabled = tour.step === 0;
   $('#tc-next').textContent = tour.step === T.steps.length - 1 ? 'Finish' : 'Next';
   // scene setup
@@ -965,7 +995,7 @@ function runStep() {
     hidePanel('sheet');
   };
   setTimeout(after, s.female !== undefined ? 600 : 50);
-  narrate(`${s.title}. ${s.text}`);
+  narrate(`${s.title}. ${state.pg && s.pgText ? s.pgText : s.text}`);
 }
 function findGroupKey(spec) {
   const [sys, name, side] = spec.split('|');
@@ -1147,6 +1177,12 @@ function frame(now) {
     if (k >= 1) { state.fAnim = null; refit(600); }
     state.tShown = -1; active = true;
   }
+  if (state.pgAnim) {
+    const a = state.pgAnim; const k = Math.min(1, (now - a.t0) / a.dur);
+    U.uPG.value = a.from + (a.to - a.from) * ease(k);
+    if (k >= 1) state.pgAnim = null;
+    active = true;
+  }
   sound.explodeMotion(Math.abs(state.t - prevT) / Math.max(dt, 1e-3) * 0.6);
   prevT = state.t;
   if (partTex && state.t !== state.tShown) { writePartTexture(); applyAutoFit(); if (state.clip.on) updateClip(); }
@@ -1215,12 +1251,12 @@ async function init() {
   U.uQMin.value.set(...qmin);
   U.uQScale.value.set(qmax[0] - qmin[0], qmax[1] - qmin[1], qmax[2] - qmin[2]);
   N = manifest.parts.length;
-  parts = manifest.parts.map(([id, sys, name, side, groups, c, ext, hidden, sex, anim, pivot, axis, region, flags, fo]) => ({
-    id, sys, name, side, groups: groups ? groups.split('>') : [], c: new THREE.Vector3(...c), ext, hidden, sex, anim, pivot, axis, region, flags, fo, hi: false,
+  parts = manifest.parts.map(([id, sys, name, side, groups, c, ext, hidden, sex, anim, pivot, axis, region, flags, fo, pg]) => ({
+    id, sys, name, side, groups: groups ? groups.split('>') : [], c: new THREE.Vector3(...c), ext, hidden, sex, anim, pivot, axis, region, flags, fo, pg: pg || 0, hi: false,
   }));
   for (const p of parts) {
     p.title = prettyName(p.name);
-    p.modeled = p.sex === 2 && (p.sys === 'organs' || p.name === 'Pudendal region (female)' || /Breast|Nipple|Ovarian|Uterine artery/.test(p.name));
+    p.modeled = p.sex === 2 && (p.sys === 'organs' || p.name === 'Pudendal region' || /Breast|Nipple|Ovarian|Uterine artery/.test(p.name));
     p.Dm = explodeVector(p, p.c);
     p.cF = femaleCenter(p);
     p.Df = explodeVector(p, p.cF);
@@ -1239,7 +1275,10 @@ async function init() {
   U.uPartTex.value = partTex;
   U.uAnimTex.value = staticTexture((p, d, o) => { d[o] = p.anim; d[o + 1] = p.pivot[0]; d[o + 2] = p.pivot[1]; d[o + 3] = p.pivot[2]; });
   U.uAxisTex.value = staticTexture((p, d, o) => { d[o] = p.axis[0]; d[o + 1] = p.axis[1]; d[o + 2] = p.axis[2]; d[o + 3] = p.flags; });
-  U.uFemTex.value = staticTexture((p, d, o) => { d[o] = p.fo[0]; d[o + 1] = p.fo[1]; d[o + 2] = p.fo[2]; d[o + 3] = p.sex; });
+  U.uFemTex.value = staticTexture((p, d, o) => { d[o] = p.fo[0]; d[o + 1] = p.fo[1]; d[o + 2] = p.fo[2]; d[o + 3] = p.sex + 4 * p.pg; });
+  (manifest.landmarks.nipples || []).slice(0, 2).forEach((q, i) => { U.uNip.value[i * 2].set(...q.tip, q.h); U.uNip.value[i * 2 + 1].set(...q.n, q.r); });
+  let pgSaved = false; try { pgSaved = localStorage.getItem('vh-pg') === '1'; } catch (e) { /* storage unavailable */ }
+  if (pgSaved) setPG(true, { quiet: true }); else syncPGButton();
   partState = new Float32Array(N); userHidden = new Uint8Array(N); defaultHidden = new Uint8Array(N);
   parts.forEach((p, i) => { if (p.hidden) userHidden[i] = defaultHidden[i] = 1; });
   for (const L of LAYERS) systems[L.id] = { def: L, on: L.on, base: null, hi: new Map() };
@@ -1278,4 +1317,4 @@ if ('serviceWorker' in navigator && !window.__VH_DATA_FORMAT__ && (location.prot
   if (ios && !standalone && !window.__VH_DATA_FORMAT__) $('#install-tip').hidden = false;
 }
 
-window.__vh = { setT, select, selectGroup, setLayer, setSkinMode, setSex, setMotion, openSection, closeSection, startTour, parts: () => parts, state, phys, camera, controls, resetView, groupIndex, view, U, pipeline, findGroupKey, updateDetail, detail };
+window.__vh = { setT, select, selectGroup, setLayer, setSkinMode, setSex, setPG, setMotion, openSection, closeSection, startTour, parts: () => parts, state, phys, camera, controls, resetView, groupIndex, view, U, pipeline, findGroupKey, updateDetail, detail };

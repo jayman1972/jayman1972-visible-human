@@ -22,6 +22,9 @@ It opens full screen like an app and works offline after the first visit.
   nerve signals, brain activity, digestion, urine flow and airflow. Heart rate is adjustable.
 - Guided tours with optional narration.
 - Male and female bodies, including reproductive anatomy.
+- **Ken mode** and **Barbie mode**: a family-friendly view that smooths over the genitals and
+  nipples like a doll. The internal organs, including the uterus, ovaries and prostate, stay visible.
+  The setting is remembered on each device.
 
 ## Repository layout
 
