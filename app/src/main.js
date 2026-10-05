@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { createRenderer, makeNoiseTexture, makeBackground, makeSharedUniforms, makeAnatomyMaterial, makePickMaterial, Pipeline } from './render.js';
-import { fetchPack, fetchFemaleField, fetchBlob } from './data.js';
+import { fetchPack, fetchFemaleField, fetchBlob, vurl } from './data.js';
 import { buildHair, HAIR_COLORS } from './hair.js';
 import { lookupInfo, prettyName } from './content.js';
 import { Physiology, SYSTEMS as PHYS } from './physiology.js';
@@ -925,7 +925,7 @@ function crumbsHtml(names, keys) {
   return items.slice(-3).join('<span class="sep" aria-hidden="true">›</span>');
 }
 let refs = null, refsPromise = null;
-function loadRefs() { if (!refsPromise) refsPromise = fetch(`${DATA}refs.json`).then((r) => (r.ok ? r.json() : {})).catch(() => ({})).then((j) => { refs = j; }); return refsPromise; }
+function loadRefs() { if (!refsPromise) refsPromise = fetch(vurl(`${DATA}refs.json`)).then((r) => (r.ok ? r.json() : {})).catch(() => ({})).then((j) => { refs = j; }); return refsPromise; }
 function infoHtml(info, refKey) {
   let html = '';
   if (info.partOf) html += `<p class="partof">Part of <strong>${escapeHtml(info.partOf)}</strong></p>`;
@@ -1677,7 +1677,7 @@ function ensureLoaded(id) {
 }
 
 async function init() {
-  const res = await fetch(`${DATA}manifest.json`);
+  const res = await fetch(vurl(`${DATA}manifest.json`));
   manifest = await res.json();
   const { qmin, qmax } = manifest;
   U.uQMin.value.set(...qmin);
@@ -1762,6 +1762,16 @@ init().catch((err) => { console.error(err); $('#loader-text').textContent = 'The
 // Installable app: offline cache via a service worker (not available inside sandboxed previews)
 if ('serviceWorker' in navigator && !window.__VH_DATA_FORMAT__ && (location.protocol === 'https:' || location.hostname === 'localhost')) {
   window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js').catch((e) => console.warn('offline cache unavailable', e)); });
+  // a newer version has been installed in the background: offer to switch to it
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController) showUpdate(); });
+}
+function showUpdate() {
+  const el = $('#update');
+  if (!el || !el.hidden) return;
+  el.hidden = false; requestAnimationFrame(() => el.classList.add('show'));
+  $('#update-reload').addEventListener('click', () => location.reload(), { once: true });
+  $('#update-later').addEventListener('click', () => { el.classList.remove('show'); setTimeout(() => { el.hidden = true; }, 250); }, { once: true });
 }
 {
   const ios = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);

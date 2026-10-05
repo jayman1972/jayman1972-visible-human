@@ -2,7 +2,10 @@
 import * as THREE from 'three';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 
-export const DATA_FORMAT = globalThis.__VH_DATA_FORMAT__ || 'bin'; // 'bin' (gzip) or 'b64' (base64 text of the gzip)
+export const DATA_FORMAT = globalThis.__VH_DATA_FORMAT__ || 'bin';
+// build version: data requests carry it, so an older offline cache never answers for a newer app
+export const BUILD = globalThis.__VH_V__ || '';
+export const vurl = (u) => (BUILD ? `${u}?v=${BUILD}` : u); // 'bin' (gzip) or 'b64' (base64 text of the gzip)
 
 async function readAll(res, expected, onProgress) {
   if (!res.body || !res.body.getReader) return new Uint8Array(await res.arrayBuffer());
@@ -36,7 +39,7 @@ async function gunzip(bytes) {
 
 export async function fetchPack(baseUrl, entry, onProgress) {
   const url = DATA_FORMAT === 'b64' ? `${baseUrl}${entry.file.replace(/\.mvb$/, '.b64.txt')}` : `${baseUrl}${entry.file}`;
-  const res = await fetch(url);
+  const res = await fetch(vurl(url));
   if (!res.ok) throw new Error(`Could not load ${entry.file} (${res.status})`);
   let bytes = await readAll(res, DATA_FORMAT === 'b64' ? Math.ceil(entry.bytes / 3) * 4 : entry.bytes, onProgress);
   if (DATA_FORMAT === 'b64') bytes = b64ToBytes(new TextDecoder().decode(bytes));
@@ -99,7 +102,7 @@ export async function decodeGeometry(raw, entry) {
 // The female shape field for everything inside the body: a 3D grid of offsets (int16, 0.1 mm)
 export async function fetchFemaleField(baseUrl, entry) {
   const url = DATA_FORMAT === 'b64' ? `${baseUrl}${entry.file.replace(/\.mvb$/, '.b64.txt')}` : `${baseUrl}${entry.file}`;
-  const res = await fetch(url);
+  const res = await fetch(vurl(url));
   if (!res.ok) throw new Error(`Could not load ${entry.file} (${res.status})`);
   let bytes = new Uint8Array(await res.arrayBuffer());
   if (DATA_FORMAT === 'b64') bytes = b64ToBytes(new TextDecoder().decode(bytes));
@@ -118,7 +121,7 @@ export async function fetchFemaleField(baseUrl, entry) {
 // A gzip-compressed binary (base64 text in the artifact build), e.g. the hair strands
 export async function fetchBlob(baseUrl, entry) {
   const url = DATA_FORMAT === 'b64' ? `${baseUrl}${entry.file.replace(/\.mvb$/, '.b64.txt')}` : `${baseUrl}${entry.file}`;
-  const res = await fetch(url);
+  const res = await fetch(vurl(url));
   if (!res.ok) throw new Error(`Could not load ${entry.file} (${res.status})`);
   let bytes = new Uint8Array(await res.arrayBuffer());
   if (DATA_FORMAT === 'b64') bytes = b64ToBytes(new TextDecoder().decode(bytes));

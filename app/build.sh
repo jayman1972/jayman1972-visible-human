@@ -28,6 +28,9 @@ else
     const h = crypto.createHash("sha256");
     for (const f of [...shell.slice(1), ...detail]) h.update(fs.readFileSync(path.join(d, f)));
     const version = h.digest("hex").slice(0, 12);
+    // the page tags its data requests with this version (an older offline cache then stays out of it)
+    const ix = path.join(d, "index.html");
+    fs.writeFileSync(ix, fs.readFileSync(ix, "utf8").replace("<script type=\"module\" src=\"app.", `<script>window.__VH_V__ = "${version}";</script><script type="module" src="app.`));
     let sw = fs.readFileSync("sw.template.js", "utf8");
     sw = sw.replace("__VERSION__", version).replace("__PRECACHE__", JSON.stringify(shell)).replace("__DETAIL_FILES__", JSON.stringify(detail));
     fs.writeFileSync(path.join(d, "sw.js"), sw);

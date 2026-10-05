@@ -1,11 +1,11 @@
 // Service worker: makes the app installable and usable offline.
 // App shell and the base model are cached at install; full-detail packs are cached
-// the first time they are viewed. A new build gets a new version and replaces the caches.
-const VERSION = '97a3c04d2745';
+// the first time they are viewed. A new build gets a new version and replaces all the caches.
+const VERSION = '12d1a94b293c';
 const SHELL = `vh-shell-${VERSION}`;
-const DETAIL = 'vh-detail-v1';
+const DETAIL = `vh-detail-${VERSION}`; // full-detail packs change with the data, so each build starts afresh
 const FONTS = 'vh-fonts-v1';
-const PRECACHE = ["./","index.html","app.0fb0361b8d.js","manifest.webmanifest","icons/apple-touch-icon.png","icons/favicon-32.png","icons/favicon-64.png","icons/icon-192.png","icons/icon-512.png","icons/maskable-512.png","data/manifest.json","data/refs.json","data/base/femfield.mvb","data/base/hair.mvb","data/base/joints.mvb","data/base/lymph.mvb","data/base/muscles.mvb","data/base/nerves.mvb","data/base/organs.mvb","data/base/skeleton.mvb","data/base/skin.mvb","data/base/vessels.mvb"];
+const PRECACHE = ["./","index.html","app.24e4ed555c.js","manifest.webmanifest","icons/apple-touch-icon.png","icons/favicon-32.png","icons/favicon-64.png","icons/icon-192.png","icons/icon-512.png","icons/maskable-512.png","data/manifest.json","data/refs.json","data/base/femfield.mvb","data/base/hair.mvb","data/base/joints.mvb","data/base/lymph.mvb","data/base/muscles.mvb","data/base/nerves.mvb","data/base/organs.mvb","data/base/skeleton.mvb","data/base/skin.mvb","data/base/vessels.mvb"];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(PRECACHE)).then(() => self.skipWaiting()));
@@ -37,6 +37,9 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin === self.location.origin) {
+    // a request tagged for another build (a newer page while this worker is still in charge): straight to the network
+    const v = url.searchParams.get('v');
+    if (v && v !== VERSION) return;
     if (req.mode === 'navigate') {
       // network first so a new version shows up, cached copy when offline
       e.respondWith(fetch(req).then((res) => { const copy = res.clone(); caches.open(SHELL).then((c) => c.put('./', copy)); return res; })

@@ -1,9 +1,9 @@
 // Service worker: makes the app installable and usable offline.
 // App shell and the base model are cached at install; full-detail packs are cached
-// the first time they are viewed. A new build gets a new version and replaces the caches.
+// the first time they are viewed. A new build gets a new version and replaces all the caches.
 const VERSION = '__VERSION__';
 const SHELL = `vh-shell-${VERSION}`;
-const DETAIL = 'vh-detail-v1';
+const DETAIL = `vh-detail-${VERSION}`; // full-detail packs change with the data, so each build starts afresh
 const FONTS = 'vh-fonts-v1';
 const PRECACHE = __PRECACHE__;
 
@@ -37,6 +37,9 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin === self.location.origin) {
+    // a request tagged for another build (a newer page while this worker is still in charge): straight to the network
+    const v = url.searchParams.get('v');
+    if (v && v !== VERSION) return;
     if (req.mode === 'navigate') {
       // network first so a new version shows up, cached copy when offline
       e.respondWith(fetch(req).then((res) => { const copy = res.clone(); caches.open(SHELL).then((c) => c.put('./', copy)); return res; })
