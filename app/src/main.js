@@ -28,6 +28,7 @@ const LAYERS = [
   { id: 'organs', label: 'Organs', dot: '#d98a7a', on: true, base: 0.0, rmul: 2.4, amul: 1.7, t0: 0.44, t1: 1.0 },
 ];
 const LAYER = Object.fromEntries(LAYERS.map((l) => [l.id, l]));
+const SYSTEM_IDS_NON_SKIN = LAYERS.map((l) => l.id).filter((id) => id !== 'skin');
 const LOAD_ORDER = ['skeleton', 'organs', 'skin', 'vessels', 'nerves', 'muscles', 'joints', 'lymph'];
 
 const REGIONS = (() => {
@@ -129,13 +130,20 @@ function makeMeshSet(sysId, geo, lod) {
   return { main, ghost, xray, pick, geo, dispose() { scene.remove(main, ghost, xray); pickScene.remove(pick); geo.dispose(); } };
 }
 
+let skinFadeState = 'shown';
+function applySkinFade() {
+  const f = skinFade(state.t);
+  U.uSkinFade.value = f;
+  const st = f >= 0.999 ? 'shown' : f <= 0.001 ? 'gone' : 'fading';
+  if (st !== skinFadeState) { skinFadeState = st; syncVisibility(); }
+}
 function syncVisibility() {
   const selSys = selSystems();
   const solid = state.skinMode === 'solid';
   for (const L of LAYERS) {
     const s = systems[L.id];
     if (!s) continue;
-    const on = L.id === 'skin' ? state.skinMode !== 'off' : s.on;
+    const on = L.id === 'skin' ? state.skinMode !== 'off' && skinFadeState !== 'gone' : s.on;
     const sets = [s.base, ...s.hi.values()].filter(Boolean);
     for (const ms of sets) {
       ms.main.visible = on;
@@ -145,10 +153,12 @@ function syncVisibility() {
       ms.pick.visible = on && (L.id !== 'skin' || solid);
     }
   }
+  // solid skin turns transparent while it fades out
+  const opaque = solid && skinFadeState === 'shown';
   for (const lod of [0, 1]) {
     const m = mat('skin', true, lod);
-    if (m.transparent === solid || m.userData.local.uSkinSolid.value !== (solid ? 1 : 0)) {
-      m.transparent = !solid; m.depthWrite = solid; m.userData.local.uSkinSolid.value = solid ? 1 : 0; m.needsUpdate = true;
+    if (m.transparent === opaque || m.userData.local.uSkinSolid.value !== (solid ? 1 : 0)) {
+      m.transparent = !opaque; m.depthWrite = opaque; m.userData.local.uSkinSolid.value = solid ? 1 : 0; m.needsUpdate = true;
     }
   }
   state.needsRender = true;
@@ -179,6 +189,14 @@ function explodeVector(p, c) {
   return qNew.addScaledVector(_r, 1 + g.radial * L.rmul * SPREAD).addScaledVector(rhat, L.base * SPREAD).sub(c);
 }
 const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+// The skin fades out as soon as the body starts to come apart (it hides everything else when
+// exploded). It stays if it is the only layer shown, or if a skin part is selected.
+function skinFade(t) {
+  if (!SYSTEM_IDS_NON_SKIN.some((id) => systems[id] && systems[id].on)) return 1;
+  for (const i of selSet) if (parts[i].sys === 'skin') return 1;
+  const k = THREE.MathUtils.clamp((t - 0.03) / 0.2, 0, 1);
+  return 1 - k * k * (3 - 2 * k);
+}
 function layerProgress(sys, t) { const L = LAYER[sys]; return ease(THREE.MathUtils.clamp((t - L.t0) / (L.t1 - L.t0), 0, 1)); }
 
 const _w = [0, 0, 0];
@@ -209,6 +227,7 @@ function writePartTexture() {
   }
   partTex.needsUpdate = true;
   U.uSkinA.value.set(0.035 + 0.07 * k.skin, 0.5 + 0.15 * k.skin);
+  applySkinFade();
   state.tShown = t;
   state.needsRender = true;
 }
@@ -238,8 +257,10 @@ function computeLayerBounds() {
 }
 function layerOn(id) { return id === 'skin' ? state.skinMode !== 'off' : systems[id] && systems[id].on; }
 const _bb = new THREE.Box3(), _lb = new THREE.Box3(), _lb2 = new THREE.Box3();
+const _bs = new THREE.Box3();
 function sceneBounds(t) {
-  _bb.makeEmpty();
+  _bb.makeEmpty(); _bs.makeEmpty();
+  const sf = skinFade(t);
   for (const L of LAYERS) {
     if (!layerOn(L.id)) continue;
     const b = layerBounds[L.id];
@@ -248,7 +269,12 @@ function sceneBounds(t) {
     _lb.min.lerpVectors(b.m0.min, b.m1.min, e); _lb.max.lerpVectors(b.m0.max, b.m1.max, e);
     _lb2.min.lerpVectors(b.f0.min, b.f1.min, e); _lb2.max.lerpVectors(b.f0.max, b.f1.max, e);
     _lb.min.lerp(_lb2.min, state.fT); _lb.max.lerp(_lb2.max, state.fT);
-    _bb.union(_lb);
+    if (L.id === 'skin') _bs.copy(_lb); else _bb.union(_lb);
+  }
+  // the skin's (outermost) extent counts in proportion to how visible it still is
+  if (!_bs.isEmpty()) {
+    if (_bb.isEmpty() || sf >= 0.999) _bb.union(_bs);
+    else if (sf > 0) { _lb.copy(_bb).union(_bs); _bb.min.lerp(_lb.min, sf); _bb.max.lerp(_lb.max, sf); }
   }
   if (_bb.isEmpty()) _bb.set(new THREE.Vector3(-0.35, 0, -0.15), new THREE.Vector3(0.35, 1.75, 0.15));
   return _bb;
@@ -676,7 +702,7 @@ function setLayer(id, on) {
   refit();
   if (on) ensureLoaded(id);
   if (!on && selSystems().has(id)) clearSelection();
-  syncVisibility(); updateChips();
+  applySkinFade(); syncVisibility(); updateChips();
 }
 function setSkinMode(m) {
   state.skinMode = m;

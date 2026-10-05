@@ -84,7 +84,7 @@ export function makeSharedUniforms() {
     uAnimA: { value: new THREE.Vector4() }, uAnimB: { value: new THREE.Vector4() }, uBladder: { value: 0 },
     uNoise: { value: null },
     uHiColor: { value: new THREE.Color('#6fe3f2') },
-    uSkinA: { value: new THREE.Vector2(0.035, 0.5) }, uGhostA: { value: 0.075 },
+    uSkinA: { value: new THREE.Vector2(0.035, 0.5) }, uSkinFade: { value: 1 }, uGhostA: { value: 0.075 },
     uClipPlane: { value: new THREE.Vector4(0, 0, 1, 1e3) }, uClipMode: { value: 0 }, uCut: { value: new THREE.Vector4() },
     uKeyDir: { value: new THREE.Vector3(0, 0, 1) }, uDetail: { value: 1 },
     ...tissueUniforms(THREE),
@@ -244,8 +244,10 @@ export function makeAnatomyMaterial(shared, mode, { isSkin = false, lodPass = 0 
       }`;
     if (mode === 'skin') post += `
       if (uSkinSolid < 0.5) {
-        diffuseColor.a = mix(uSkinA.x, uSkinA.y, fres);
+        diffuseColor.a = mix(uSkinA.x, uSkinA.y, fres) * uSkinFade;
         outgoingLight = mix(outgoingLight, outgoingLight * vec3(0.8, 0.92, 1.0) + vec3(0.02, 0.03, 0.04), 0.5);
+      } else {
+        diffuseColor.a = uSkinFade;
       }`;
     if (mode === 'ghost') post += `
       float gl = dot(outgoingLight, vec3(0.3, 0.5, 0.2));

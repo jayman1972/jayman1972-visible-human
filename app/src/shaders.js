@@ -144,6 +144,7 @@ uniform vec4 uTisB[${TISSUE_COUNT}];
 uniform vec3 uTisC[${TISSUE_COUNT}];
 uniform vec3 uHiColor;
 uniform vec2 uSkinA;
+uniform float uSkinFade;
 uniform float uGhostA;
 uniform float uSkinSolid;
 uniform float uIsSkin;
