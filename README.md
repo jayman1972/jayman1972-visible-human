@@ -72,8 +72,10 @@ The `pipeline/` scripts need the Z-Anatomy PC version, MakeHuman's data files an
   converted models in `docs/data` are shared under the same CC BY-SA 4.0 license.
 - The atlas notes come from Wikipedia text bundled with Z-Anatomy (CC BY-SA).
 - The female body shape comes from [MakeHuman](http://www.makehumancommunity.org)'s average
-  adult man and woman (CC0). Their difference is fitted onto this body: breasts, waist, hips,
-  shoulders, limbs and face.
+  adult man and a slim adult woman with its "ideal proportions" (CC0). Their difference is fitted
+  onto this body: breasts, waist, hips, shoulders, limbs and face. `pipeline/femskin.mjs` then
+  smooths out the male model's muscle relief, slims the neck and waist and scales the head up
+  slightly, with everything inside the body following the skin.
 - The female reproductive organs, breast tissue and the pudendal region are modeled
   procedurally from standard adult measurements. They are not scan-based.
 - The female face refinements (`pipeline/face.mjs`) and the hair, eyebrows and eyelashes shown
