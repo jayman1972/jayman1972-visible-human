@@ -178,6 +178,27 @@ void anatomyVertex(out vec3 outPos, inout vec3 n, out float cull) {
 // Fragment helpers
 // ---------------------------------------------------------------------------
 export const FRAG_PARS = /* glsl */ `
+// hairline (male space, around the head): where the scalp is tinted under the hair
+uniform float uHair; uniform vec3 uHairO; uniform vec3 uHairHc; uniform vec2 uHairLineF[11]; uniform vec2 uHairLineM[11];
+uniform vec3 uHairColF; uniform vec3 uHairColM;
+float hairLine(float deg, bool fem) {
+  vec2 prev = fem ? uHairLineF[0] : uHairLineM[0];
+  for (int i = 1; i < 11; i++) {
+    vec2 cur = fem ? uHairLineF[i] : uHairLineM[i];
+    if (deg <= cur.x) return mix(prev.y, cur.y, (deg - prev.x) / max(cur.x - prev.x, 1e-3));
+    prev = cur;
+  }
+  return prev.y;
+}
+float hairDensity(vec3 q, float fem) {
+  vec3 r = q - uHairO;
+  if (r.y < -0.12 || r.z > 0.04) return 0.0;
+  float deg = degrees(atan(abs(r.x), q.z - uHairHc.z));
+  float h = mix(hairLine(deg, false), hairLine(deg, true), fem);
+  float d = smoothstep(h - 0.003, h + 0.008, r.y);
+  if (abs(r.x) > 0.05) d *= smoothstep(0.028, 0.038, length(vec2(r.y + 0.01, r.z + 0.08)));
+  return d;
+}
 uniform highp sampler3D uNoise;
 uniform vec4 uTisA[${TISSUE_COUNT}];
 uniform vec4 uTisB[${TISSUE_COUNT}];

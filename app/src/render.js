@@ -86,6 +86,9 @@ export function makeSharedUniforms() {
     uHiColor: { value: new THREE.Color('#6fe3f2') },
     uSkinA: { value: new THREE.Vector2(0.035, 0.5) }, uSkinFade: { value: 1 }, uGhostA: { value: 0.075 },
     uClipPlane: { value: new THREE.Vector4(0, 0, 1, 1e3) }, uClipMode: { value: 0 }, uCut: { value: new THREE.Vector4() }, uHover: { value: -1 }, uEye: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) },
+    uHair: { value: 0 }, uHairO: { value: new THREE.Vector3() }, uHairHc: { value: new THREE.Vector3() },
+    uHairLineF: { value: Array.from({ length: 11 }, () => new THREE.Vector2()) }, uHairLineM: { value: Array.from({ length: 11 }, () => new THREE.Vector2()) },
+    uHairColF: { value: new THREE.Color() }, uHairColM: { value: new THREE.Color() },
     uFemField: { value: null }, uFemMin: { value: new THREE.Vector3() }, uFemInv: { value: new THREE.Vector3() }, uAreola: { value: [new THREE.Vector4(), new THREE.Vector4()] },
     uKeyDir: { value: new THREE.Vector3(0, 0, 1) }, uDetail: { value: 1 },
     ...tissueUniforms(THREE),
@@ -192,6 +195,10 @@ export function makeAnatomyMaterial(shared, mode, { isSkin = false, lodPass = 0 
           }
         }
         if (limbus >= 0.0) diffuseColor.rgb = pow(mix(vec3(0.16, 0.2, 0.24), vec3(0.9, 0.89, 0.87), limbus), vec3(2.2));
+        if (uIsSkin > 0.5 && uHair > 0.0) { // hair-coloured scalp under the strands
+          float hd = hairDensity(vMalePos, uFemale);
+          if (hd > 0.0) diffuseColor.rgb = mix(diffuseColor.rgb, mix(uHairColM * 1.4, uHairColF * 0.8, uFemale) * mix(0.85, 1.15, nz(vMalePos * 500.0).a), hd * uHair * 0.94);
+        }
         if (uIsSkin > 0.5 && uFemale >= 0.5 && uPG < 0.5 && uAreola[0].w > 0.0) {
           float d = min(distance(vFemPos, uAreola[0].xyz), distance(vFemPos, uAreola[1].xyz)), r = uAreola[0].w;
           float a = smoothstep(r, r * 0.78, d) * (0.72 + 0.12 * (nz(vFemPos * 900.0).a - 0.5) * DETAIL(900.0));

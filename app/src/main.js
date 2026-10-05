@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { createRenderer, makeNoiseTexture, makeBackground, makeSharedUniforms, makeAnatomyMaterial, makePickMaterial, Pipeline } from './render.js';
-import { fetchPack, fetchFemaleField } from './data.js';
+import { fetchPack, fetchFemaleField, fetchBlob } from './data.js';
+import { buildHair, HAIR_COLORS } from './hair.js';
 import { lookupInfo, prettyName } from './content.js';
 import { Physiology, SYSTEMS as PHYS } from './physiology.js';
 import { SoundEngine } from './audio.js';
@@ -119,6 +120,28 @@ function makeMeshSet(sysId, geo, lod) {
   ghost.renderOrder = 5; xray.renderOrder = 20;
   scene.add(main, ghost, xray); pickScene.add(pick);
   return { main, ghost, xray, pick, geo, dispose() { scene.remove(main, ghost, xray); pickScene.remove(pick); geo.dispose(); } };
+}
+
+// Hair (solid skin only): follows the head through the explode and the male / female morph and
+// fades out with the skin
+let hair = null, hairHead = null;
+const _ho = new THREE.Vector3(), _hs = new THREE.Vector3();
+function updateHair() {
+  if (!hair) return;
+  const on = state.skinMode === 'solid' && layerOn('skin') && !state.isolated && !state.clip.on;
+  const base = on ? skinFade(state.t) : 0, f = state.fT;
+  const ss = (a, b, x) => { const k = THREE.MathUtils.clamp((x - a) / (b - a), 0, 1); return k * k * (3 - 2 * k); };
+  const vis = { female: base * ss(0.45, 0.8, f), male: base * (1 - ss(0.2, 0.55, f)) };
+  explodeOffset(hairHead, state.t, f, _ho);
+  _hs.subVectors(hairHead.cF, hairHead.c);
+  const px = (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) / (view.fullH * renderer.getPixelRatio());
+  for (const sex of ['female', 'male']) {
+    const m = hair[sex], u = m.material.uniforms;
+    u.uVis.value = vis[sex]; m.visible = vis[sex] > 0.002;
+    u.uOffset.value.copy(_ho).addScaledVector(_hs, sex === 'male' ? f : -(1 - f));
+    u.uPx.value = px;
+  }
+  U.uHair.value = base;
 }
 
 let skinFadeState = 'shown';
@@ -1174,30 +1197,136 @@ function featured() {
   return out;
 }
 function sideLabel(sd) { return sd === 'L' ? 'Left · ' : sd === 'R' ? 'Right · ' : ''; }
+// Everyday words → anatomical terms. "a|b" = any of them; several words = all of them.
+const LAY = [
+  ['big toe', 'first finger foot'], ['little toe', 'fifth finger foot'], ['toes', 'finger foot'], ['toe', 'finger foot'],
+  ['thumb', 'first finger hand'], ['index finger', 'second finger hand'], ['middle finger', 'third finger hand'], ['ring finger', 'fourth finger hand'],
+  ['pinky', 'fifth finger hand'], ['little finger', 'fifth finger hand'], ['finger bones', 'phalanx hand'], ['knuckles', 'metacarpophalangeal'],
+  ['wrist bones', 'scaphoid|lunate|triquetrum|pisiform|trapezium|trapezoid|capitate|hamate'], ['carpals', 'scaphoid|lunate|triquetrum|pisiform|trapezium|trapezoid|capitate|hamate'],
+  ['ankle bones', 'talus|calcaneus|navicular|cuboid|cuneiform'], ['tarsals', 'talus|calcaneus|navicular|cuboid|cuneiform'],
+  ['thigh bone', 'femur'], ['shoulder blade', 'scapula'], ['collar bone', 'clavicle'], ['collarbone', 'clavicle'], ['knee cap', 'patella'], ['kneecap', 'patella'],
+  ['shin bone', 'tibia'], ['shinbone', 'tibia'], ['shin', 'tibia'], ['breastbone', 'sternum'], ['breast bone', 'sternum'], ['heel bone', 'calcaneus'], ['heel', 'calcaneus|calcaneal'],
+  ['upper jaw', 'maxilla'], ['jawbone', 'mandible'], ['jaw', 'mandible|masseter|temporomandibular'], ['tailbone', 'coccyx'], ['tail bone', 'coccyx'], ['cheekbone', 'zygomatic'], ['cheek bone', 'zygomatic'],
+  ['skull', 'cranium|cranial|mandible'], ['backbone', 'vertebra|vertebral'], ['spine', 'vertebra|vertebral|spinal'], ['vertebrae', 'vertebra'], ['disc', 'intervertebral'],
+  ['ear bones', 'malleus|incus|stapes'], ['hammer', 'malleus'], ['anvil', 'incus'], ['stirrup', 'stapes'], ['eardrum', 'tympanic'], ['ear drum', 'tympanic'],
+  ['pelvis', 'hip|sacrum|coccyx|pelvic'], ['hip', 'hip|coxal|iliac'], ['funny bone', 'ulnar nerve'],
+  ['windpipe', 'trachea'], ['wind pipe', 'trachea'], ['gullet', 'oesophagus'], ['food pipe', 'oesophagus'], ['esophagus', 'oesophagus'], ['voice box', 'larynx'], ['adams apple', 'thyroid cartilage'], ["adam's apple", 'thyroid cartilage'],
+  ['belly button', 'umbilicus|umbilical'], ['navel', 'umbilicus|umbilical'], ['achilles', 'calcaneal tendon'],
+  ['glutes', 'gluteus'], ['buttocks', 'gluteus|gluteal'], ['buttock', 'gluteus|gluteal'], ['bum', 'gluteus|gluteal'], ['abs', 'rectus abdominis'], ['six pack', 'rectus abdominis'],
+  ['lats', 'latissimus'], ['pecs', 'pectoralis'], ['traps', 'trapezius'], ['delts', 'deltoid'], ['quads', 'rectus femoris|vastus'], ['quadriceps', 'rectus femoris|vastus'],
+  ['hamstrings', 'biceps femoris|semitendinosus|semimembranosus'], ['hamstring', 'biceps femoris|semitendinosus|semimembranosus'], ['calf', 'gastrocnemius|soleus|sural'], ['calves', 'gastrocnemius|soleus'],
+  ['womb', 'uterus'], ['fallopian', 'uterine tube'], ['oviduct', 'uterine tube'], ['ovaries', 'ovary'], ['testicles', 'testis'], ['testicle', 'testis'], ['testes', 'testis'],
+  ['breasts', 'breast|mammary'], ['breast', 'breast|mammary'], ['gut', 'jejunum|duodenum|colon|stomach'], ['bowel', 'jejunum|colon'], ['intestines', 'jejunum|duodenum|colon'],
+  ['small intestine', 'jejunum|duodenum|ileum'], ['large intestine', 'colon|caecum|appendix|rectum'], ['appendix', 'appendix'], ['pituitary', 'hypophysis'], ['adrenal', 'suprarenal'],
+  ['tear gland', 'lacrimal'], ['tears', 'lacrimal'], ['gums', 'gingiva'], ['tonsils', 'tonsil'], ['nostril', 'nasal|nose'], ['eye socket', 'orbit|orbital'],
+  ['brain stem', 'brainstem'], ['blood vessels', 'artery|vein'], ['veins', 'vein'], ['arteries', 'artery'], ['nerves', 'nerve'], ['muscles', 'muscle'], ['bones', 'bone'],
+];
+const LAY_SORTED = LAY.slice().sort((a, b) => b[0].length - a[0].length);
+// query → groups of alternatives; every group must match some word of a result
+function parseQuery(q) {
+  let text = ' ' + q.toLowerCase().replace(/[^a-z0-9'’ -]+/g, ' ').replace(/\s+/g, ' ') + ' ';
+  const groups = [];
+  for (const [lay, sub] of LAY_SORTED) {
+    const at = text.indexOf(' ' + lay + ' ');
+    if (at < 0) continue;
+    text = text.slice(0, at) + ' ' + text.slice(at + lay.length + 1);
+    for (const part of sub.split(' ')) groups.push({ alts: part.split('|'), lay: true });
+  }
+  for (const w of text.trim().split(' ')) if (w && !/^(of|the|and|a)$/.test(w)) groups.push({ alts: [w.replace(/[’']s$/, '')], lay: false });
+  return groups;
+}
+// edit distance between w and the closest prefix of t (typos and plurals)
+function prefixDistance(w, t, max) {
+  const n = w.length, m = Math.min(t.length, n + max);
+  let prev = Array.from({ length: m + 1 }, (_, j) => j), best = Infinity;
+  for (let i = 1; i <= n; i++) {
+    const cur = [i]; let rowMin = i;
+    for (let j = 1; j <= m; j++) { const c = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (w[i - 1] === t[j - 1] ? 0 : 1)); cur.push(c); if (c < rowMin) rowMin = c; }
+    if (rowMin > max) return Infinity;
+    prev = cur;
+  }
+  for (let j = Math.max(0, n - max); j <= m; j++) best = Math.min(best, prev[j]);
+  return best;
+}
+function wordScore(alt, tokens) { // 3 exact word, 2 word prefix, 1 close (typo / plural), 0 none
+  let best = 0;
+  for (const t of tokens) {
+    if (t === alt) return 3;
+    if (t.startsWith(alt)) { best = 2; continue; }
+    if (best < 1 && alt.length >= 4 && t[0] === alt[0] && prefixDistance(alt, t, alt.length >= 7 ? 2 : 1) <= (alt.length >= 7 ? 2 : 1)) best = 1;
+  }
+  return best;
+}
+// a result that only exists in the other body (e.g. "womb" while the male is shown); doll modes keep
+// their hidden parts out of search
+function otherBody(s) {
+  const other = state.female >= 0.5 ? 1 : 2;
+  const fits = (p) => p.sex === other && !(state.pg && p.pg === 1);
+  return s.kind === 'p' ? fits(s.p) : s.g.ids.some((i) => fits(parts[i]));
+}
 function renderSearch(q) {
-  q = q.trim().toLowerCase();
+  q = q.trim();
   let res;
   const ok = (s) => (s.kind === 'p' ? sexOk(s.p) : s.g.ids.some((i) => sexOk(parts[i])));
   if (!q) { res = featured(); $('#search-hint').textContent = 'Popular'; }
   else {
-    const words = q.split(/\s+/);
-    res = searchIndex.filter((s) => ok(s) && words.every((w) => s.lc.includes(w)));
-    const score = (s) => { const t = s.title.toLowerCase(); return t === q ? 0 : t.startsWith(q) ? 1 : (' ' + s.lc).includes(' ' + q) ? 2 : 3; };
-    res.sort((a, b) => score(a) - score(b) || (a.kind === 'g' ? -1 : 0) - (b.kind === 'g' ? -1 : 0) || a.title.length - b.title.length);
-    $('#search-hint').textContent = res.length ? `${res.length} match${res.length === 1 ? '' : 'es'}` : 'No matches. Try a simpler word, like “arm” or “vein”.';
+    const groups = parseQuery(q), ql = q.toLowerCase();
+    const scored = [];
+    for (const s of searchIndex) {
+      const here = ok(s), there = !here && otherBody(s);
+      if (!here && !there) continue;
+      let sc = 0, fuzzy = false;
+      for (const g of groups) {
+        let b = 0; for (const a of g.alts) b = Math.max(b, wordScore(a, s.tokens));
+        if (!b) { sc = -1; break; }
+        if (b === 1) fuzzy = true;
+        sc += b;
+      }
+      if (sc < 0) continue;
+      const t = s.title.toLowerCase();
+      if (t === ql) sc += 20; else if (t.startsWith(ql)) sc += 10; else if (t.includes(ql)) sc += 5;
+      if (s.kind === 'g') sc += 1.5;
+      if (there) sc -= 2.5;
+      scored.push({ s, sc, fuzzy });
+    }
+    scored.sort((a, b) => b.sc - a.sc || a.s.title.length - b.s.title.length);
+    res = scored.map((r) => r.s);
+    const close = scored.length && scored.every((r) => r.fuzzy);
+    $('#search-hint').textContent = res.length ? `${res.length} match${res.length === 1 ? '' : 'es'}${close ? ' (closest spelling)' : ''}` : 'No matches. Try a simpler word, like “arm” or “vein”.';
     res = res.slice(0, 80);
   }
+  const bodyLabel = state.female >= 0.5 ? 'Male body' : 'Female body';
   searchList.innerHTML = res.map((s) => {
-    if (s.kind === 'g') return `<li><button type="button" data-gkey="${escapeHtml(s.g.key)}"><span class="dot whole" style="--dot:${LAYER[s.g.sys].dot}"></span><span class="nm">${escapeHtml(s.title)}</span><span class="meta">${sideLabel(s.g.side)}${s.g.ids.filter((i) => sexOk(parts[i])).length} parts</span></button></li>`;
-    return `<li><button type="button" data-id="${s.p.id}"><span class="dot" style="--dot:${LAYER[s.p.sys].dot}"></span><span class="nm">${escapeHtml(s.p.title)}</span><span class="meta">${sideLabel(s.p.side)}${LAYER[s.p.sys].label}</span></button></li>`;
+    const there = !ok(s);
+    if (s.kind === 'g') return `<li><button type="button" data-gkey="${escapeHtml(s.g.key)}"${there ? ' data-other="1"' : ''}><span class="dot whole" style="--dot:${LAYER[s.g.sys].dot}"></span><span class="nm">${escapeHtml(s.title)}</span><span class="meta">${sideLabel(s.g.side)}${there ? bodyLabel : `${s.g.ids.filter((i) => sexOk(parts[i])).length} parts`}</span></button></li>`;
+    return `<li><button type="button" data-id="${s.p.id}"${there ? ' data-other="1"' : ''}><span class="dot" style="--dot:${LAYER[s.p.sys].dot}"></span><span class="nm">${escapeHtml(s.p.title)}</span><span class="meta">${sideLabel(s.p.side)}${there ? bodyLabel : LAYER[s.p.sys].label}</span></button></li>`;
   }).join('');
 }
 searchInput.addEventListener('input', () => renderSearch(searchInput.value));
+// Results open in Focus (zoom to it, everything else stays) or Isolate (show only it); Focus by default
+let searchMode = 'focus';
+try { if (localStorage.getItem('vh-search-mode') === 'isolate') searchMode = 'isolate'; } catch (e) { /* storage unavailable */ }
+function syncSearchMode() { for (const b of document.querySelectorAll('#search-mode button')) b.setAttribute('aria-pressed', b.dataset.mode === searchMode ? 'true' : 'false'); }
+syncSearchMode();
+$('#search-mode').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-mode]'); if (!b) return;
+  searchMode = b.dataset.mode; syncSearchMode();
+  try { localStorage.setItem('vh-search-mode', searchMode); } catch (err) { /* storage unavailable */ }
+  searchInput.focus();
+});
 searchList.addEventListener('click', (e) => {
   const b = e.target.closest('button[data-id], button[data-gkey]'); if (!b) return;
   closeSearch();
-  if (b.dataset.gkey) selectGroup(b.dataset.gkey, { focus: true, fromSearch: true }); else select(+b.dataset.id, { focus: true, fromSearch: true });
+  if (b.dataset.other) setSex(state.female < 0.5); // switch to the body that has it
+  if (state.t > 0.001) animateT(0, 1800); // the detailed view is of the assembled body
+  if (b.dataset.gkey) selectGroup(b.dataset.gkey, { focus: searchMode === 'focus', fromSearch: true }); else select(+b.dataset.id, { focus: searchMode === 'focus', fromSearch: true });
+  if (searchMode === 'isolate' && selSet.size) {
+    state.isolated = true; recomputeStates(); focusIds([...selSet]);
+    $('#btn-isolate').textContent = 'Show all'; $('#btn-isolate').setAttribute('aria-pressed', 'true');
+  }
 });
+// desktop: the search opens as a drop-down; a click outside it closes it
+document.addEventListener('pointerdown', (e) => { if (!searchEl.hidden && matchMedia('(min-width: 820px)').matches && !searchEl.contains(e.target) && !e.target.closest('#btn-search')) closeSearch(); });
 $('#btn-search').addEventListener('click', () => { unlockAudio(); openSearch(); });
 $('#search-close').addEventListener('click', closeSearch);
 searchEl.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSearch(); });
@@ -1210,6 +1339,13 @@ let hintTimer = null;
 function showHint(force) { hint.hidden = false; requestAnimationFrame(() => hint.classList.add('show')); clearTimeout(hintTimer); if (!force) hintTimer = setTimeout(dismissHint, 10000); }
 function dismissHint() { if (hint.hidden) return; hint.classList.remove('show'); setTimeout(() => { hint.hidden = true; }, 300); }
 $('#hint-ok').addEventListener('click', () => { unlockAudio(); dismissHint(); });
+// About & sources: credits and licenses, opened from the help card
+const about = $('#about');
+function openAbout() { dismissHint(); about.hidden = false; requestAnimationFrame(() => about.classList.add('open')); setTimeout(() => $('#about-close').focus(), 60); }
+function closeAbout() { if (about.hidden) return false; about.classList.remove('open'); setTimeout(() => { about.hidden = true; }, 200); return true; }
+$('#btn-about').addEventListener('click', openAbout);
+$('#about-close').addEventListener('click', closeAbout);
+about.addEventListener('click', (e) => { if (e.target === about) closeAbout(); });
 function showToast(msg) {
   const t = $('#toast'); t.textContent = msg; t.hidden = false;
   requestAnimationFrame(() => t.classList.add('show'));
@@ -1315,6 +1451,7 @@ if (matchMedia('(hover: hover) and (pointer: fine)').matches) {
 }
 function closeTopmost() {
   if (!searchEl.hidden) { closeSearch(); return true; }
+  if (closeAbout()) return true;
   if (!hint.hidden) { dismissHint(); return true; }
   if (tour.active) { endTour(); return true; }
   if (state.clip.on) { closeSection(); return true; }
@@ -1476,6 +1613,7 @@ function frame(now) {
   sound.explodeMotion(Math.abs(state.t - prevT) / Math.max(dt, 1e-3) * 0.6);
   prevT = state.t;
   if (partTex && state.t !== state.tShown) { writePartTexture(); applyAutoFit(); if (state.clip.on) updateClip(); }
+  updateHair();
   if (state.camAnim) {
     const c = state.camAnim; const k = Math.min(1, (now - c.t0) / c.dur), e = ease(k);
     controls.target.lerpVectors(c.fromT, c.target, e); camera.position.lerpVectors(c.fromP, c.position, e);
@@ -1582,11 +1720,13 @@ async function init() {
   parts.forEach((p, i) => { if (p.hidden) userHidden[i] = defaultHidden[i] = 1; });
   for (const L of LAYERS) systems[L.id] = { def: L, on: L.on, base: null, hi: new Map() };
   buildGroups();
-  searchIndex = parts.map((p) => ({ kind: 'p', p, title: p.title, lc: (p.title + ' ' + p.name + ' ' + (ALIASES[p.name] || '')).toLowerCase() }));
+  const tok = (lc) => [...new Set(lc.replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean))];
+  searchIndex = parts.map((p) => { const lc = (p.title + ' ' + p.name + ' ' + (ALIASES[p.name] || '')).toLowerCase(); return { kind: 'p', p, title: p.title, lc, tokens: tok(lc) }; });
   for (const g of groupIndex.values()) {
     if (g.ids.length < 2 || ROOT_GROUPS.test(g.name)) continue;
     const title = groupTitle(g.name);
-    searchIndex.push({ kind: 'g', g, title, lc: (title + ' ' + (ALIASES[g.name] || '')).toLowerCase() });
+    const lc = (title + ' ' + g.name + ' ' + (ALIASES[g.name] || '')).toLowerCase();
+    searchIndex.push({ kind: 'g', g, title, lc, tokens: tok(lc) });
   }
   buildLayerChips(); buildRailTicks(); buildMotionPanel(); buildTours();
   measureInsets(); measureExplodeShape(); explodeKX = wideSpread(); rebuildExplode();
@@ -1600,8 +1740,21 @@ async function init() {
   requestAnimationFrame(frame);
   const first = LOAD_ORDER.filter((id) => systems[id].on);
   await Promise.all(first.map((id) => ensureLoaded(id)));
+  if (manifest.hair) loadHair(manifest.hair).catch((e) => console.warn('hair unavailable', e));
   showHint(false);
   for (const id of LOAD_ORDER) if (!systems[id].on) await ensureLoaded(id);
+}
+
+async function loadHair(H) {
+  const bytes = await fetchBlob(DATA, H);
+  hair = buildHair(bytes, H);
+  hairHead = parts.find((p) => p.sys === 'skin' && p.name === 'Parietal region' && p.side === 'L') || parts.find((p) => p.sys === 'skin');
+  for (const sex of ['female', 'male']) { hair[sex].material.uniforms.uCut = U.uCut; scene.add(hair[sex]); }
+  U.uHairO.value.set(...H.frame.o); U.uHairHc.value.set(...H.frame.hc);
+  H.hairline.female.forEach(([a, h], i) => U.uHairLineF.value[i].set(a, h));
+  H.hairline.male.forEach(([a, h], i) => U.uHairLineM.value[i].set(a, h));
+  U.uHairColF.value.copy(HAIR_COLORS.female); U.uHairColM.value.copy(HAIR_COLORS.male);
+  updateHair(); state.needsRender = true;
 }
 
 init().catch((err) => { console.error(err); $('#loader-text').textContent = 'The anatomy data could not load. Reload the page to try again.'; });

@@ -114,3 +114,13 @@ export async function fetchFemaleField(baseUrl, entry) {
   tex.unpackAlignment = 1; tex.needsUpdate = true;
   return tex;
 }
+
+// A gzip-compressed binary (base64 text in the artifact build), e.g. the hair strands
+export async function fetchBlob(baseUrl, entry) {
+  const url = DATA_FORMAT === 'b64' ? `${baseUrl}${entry.file.replace(/\.mvb$/, '.b64.txt')}` : `${baseUrl}${entry.file}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Could not load ${entry.file} (${res.status})`);
+  let bytes = new Uint8Array(await res.arrayBuffer());
+  if (DATA_FORMAT === 'b64') bytes = b64ToBytes(new TextDecoder().decode(bytes));
+  return gunzip(bytes);
+}

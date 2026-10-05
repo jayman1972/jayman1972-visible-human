@@ -12,6 +12,8 @@ import { femaleParts } from './female.mjs';
 import { VULVA } from '../app/src/warp.js';
 import { makeFemaleTransfer, smoothField, REG } from './mhfemale.mjs';
 import { liftPatch } from './pudlift.mjs';
+import { faceFrame, femaleFaceOffset, femaleBrowOffset } from './face.mjs';
+import { buildHair, packHair, HAIRLINE } from './hair.mjs';
 
 await MeshoptSimplifier.ready;
 await MeshoptEncoder.ready;
@@ -494,12 +496,15 @@ const fem = {};
     for (let k = 0; k < M.P.length; k += 3) { P.push([M.P[k], M.P[k + 1], M.P[k + 2]]); N.push([M.N[k], M.N[k + 1], M.N[k + 2]]); R.push(skinRegion(p.name, M.P[k])); top = Math.max(top, M.P[k + 1]); }
   }
   fem.joints = joints;
+  // eye centres (iris centroids) for the face frame
+  fem.eyes = ['R', 'L'].map((sd) => { const p = allParts.find((q) => q.sys === 'nerves' && q.name === 'Iris' && q.side === sd); const P = p.mesh.P, c = [0, 0, 0]; for (let k = 0; k < P.length; k += 3) for (let a = 0; a < 3; a++) c[a] += P[k + a] / (P.length / 3); return { c }; });
+  fem.face = faceFrame(fem.eyes);
   fem.T = makeFemaleTransfer({ joints, height: top, skin: { P, N, R } }, { age: 30, breastSize: 0.78, breastFirmness: 0.45, weight: 0.55, heightRatio: 0.94 });
 }
 // per-vertex skin offsets (continuous across the skin's many pieces)
 function computeSkinField(parts) {
   let n = 0; for (const p of parts) n += p.mesh.P.length / 3;
-  const P = new Float64Array(n * 3), D = new Float64Array(n * 3), B = new Float32Array(n), tris = [], free = new Uint8Array(n), regionOfV = new Uint8Array(n);
+  const P = new Float64Array(n * 3), D = new Float64Array(n * 3), B = new Float32Array(n), tris = [], free = new Uint8Array(n), regionOfV = new Uint8Array(n), NN = new Float64Array(n * 3), brow = new Int32Array(n).fill(-1);
   let o = 0, miss = 0;
   for (const p of parts) {
     const M = p.mesh, m = M.P.length / 3;
@@ -511,6 +516,8 @@ function computeSkinField(parts) {
       B[o + k] = r ? r.breast : 0;
       free[o + k] = p.sex === 2 ? 1 : 0; // the female pudendal fill follows its surroundings
       regionOfV[o + k] = skinRegion(p.name, q[0]);
+      for (let a = 0; a < 3; a++) NN[(o + k) * 3 + a] = M.N[k * 3 + a];
+      if (/^Eyebrow$/.test(p.name)) brow[o + k] = p.side === 'L' ? 0 : 1;
     }
     for (let t = 0; t < M.I.length; t++) tris.push(M.I[t] + o);
     p._fo = o; o += m;
@@ -535,6 +542,18 @@ function computeSkinField(parts) {
     const Aff = (q) => [0, 1, 2].map((c) => q[0] * Mx[0][4 + c] + q[1] * Mx[1][4 + c] + q[2] * Mx[2][4 + c] + Mx[3][4 + c]);
     for (const i of idx) { const w = wOf(i), q = [P[i * 3], P[i * 3 + 1], P[i * 3 + 2]], t = Aff(q); for (let a = 0; a < 3; a++) D[i * 3 + a] = D[i * 3 + a] * (1 - w) + (t[a] - q[a]) * w; }
     if (!parts.handLogged) console.log(`hand ${sgn > 0 ? 'L' : 'R'}: affine offsets on ${idx.length} skin vertices (fit to ${used})`);
+  }
+  // female face touches and thinner, arched eyebrows (face.mjs)
+  {
+    const FF = fem.face, line = new Map();
+    for (let i = 0; i < n; i++) if (brow[i] >= 0) { const key = brow[i] + ':' + Math.round(P[i * 3] / 0.003); const e = line.get(key) || [0, 0]; e[0] += P[i * 3 + 1]; e[1]++; line.set(key, e); }
+    for (let i = 0; i < n; i++) {
+      const q = [P[i * 3], P[i * 3 + 1], P[i * 3 + 2]];
+      if (q[1] < 1.4) continue;
+      const d = femaleFaceOffset(q, [NN[i * 3], NN[i * 3 + 1], NN[i * 3 + 2]], FF);
+      if (brow[i] >= 0) { const e = line.get(brow[i] + ':' + Math.round(q[0] / 0.003)); const b = femaleBrowOffset(q, e[0] / e[1], FF); for (let a = 0; a < 3; a++) d[a] += b[a]; }
+      for (let a = 0; a < 3; a++) D[i * 3 + a] += d[a];
+    }
   }
   for (const p of parts) { const m = p.mesh.P.length / 3; p.femD = Float32Array.from(D.subarray(p._fo * 3, (p._fo + m) * 3)); p.femB = B.slice(p._fo, p._fo + m); }
   if (miss) console.log(`  ${miss} skin vertices without a MakeHuman match`);
@@ -1074,6 +1093,17 @@ for (const p of allParts) { // centre of the part in the female body
   const gz = zlib.gzipSync(buf, { level: 9 });
   fs.writeFileSync(`${OUT}/base/femfield.mvb`, gz);
   manifest.femField = { file: 'base/femfield.mvb', dims: fem.F.dims, min: fem.F.min, cell: fem.F.cell, bytes: gz.length };
+}
+// Hair (skin view): scalp hair, eyebrows and eyelashes for both bodies (hair.mjs)
+{
+  const skin = maleSkin().filter((p) => p.femN).map((p) => ({ name: p.name, side: p.side, P: p.mesh.P, D: p.femD, N: p.mesh.N, FN: p.femN, I: p.mesh.I }));
+  const hair = buildHair({ skin, face: fem.face, eyes: fem.eyes });
+  const bbox = [[-0.3, 1.0, -0.4], [0.3, 1.9, 0.25]];
+  const { buffer, meta } = packHair(hair.groups, bbox);
+  const gz = zlib.gzipSync(buffer, { level: 9 });
+  fs.writeFileSync(`${OUT}/base/hair.mvb`, gz);
+  manifest.hair = { file: 'base/hair.mvb', bytes: gz.length, bbox, groups: meta, frame: hair.frame, hairline: HAIRLINE };
+  console.log('hair:', meta.map((m) => `${m.id} ${m.strands}x${m.points}`).join(', '), (gz.length / 1e6).toFixed(2), 'MB');
 }
 manifest.partFields = ['id', 'sys', 'name', 'side', 'groups', 'center', 'extent', 'hidden', 'sex', 'anim', 'pivot', 'axis', 'region', 'flags', 'femaleOffset', 'pg', 'femaleCenter'];
 manifest.parts = allParts.map((p) => [p.id, p.sys, p.name, p.side, p.groups.join('>'), p.c.map(r4), p.ext.map(r4), p.hidden ? 1 : 0, p.sex, p.anim, p.pivot.map(r4), p.axis.map((v) => +v.toFixed(3)), p.region, p.femSpace ? 4 : 0, (FEMALE_OFFSET[p.name] || [0, 0, 0]), p.pg || 0, p.cF.map(r4)]);

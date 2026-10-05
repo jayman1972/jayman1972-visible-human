@@ -280,7 +280,13 @@ body.has-panel .dock * { pointer-events: none !important; }
   font: 16px var(--f-body); -webkit-user-select: text; user-select: text;
 }
 #search-input::placeholder { color: var(--faint); }
-#search-hint { max-width: 640px; width: 100%; margin: 0 auto; font-family: var(--f-ui); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.search-sub { display: flex; align-items: center; justify-content: space-between; gap: 10px; max-width: 640px; width: 100%; margin: 0 auto; }
+#search-hint { min-width: 0; font-family: var(--f-ui); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+#search-mode { display: flex; align-items: center; gap: 4px; flex: none; font-family: var(--f-ui); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+#search-mode span { margin-right: 4px; }
+#search-mode button { height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line); background: none; color: var(--muted); font: inherit; letter-spacing: 0.08em; cursor: pointer; }
+#search-mode button[aria-pressed="true"] { background: var(--xray); border-color: var(--xray); color: var(--xray-ink); }
+.search-lbl, .search-kbd { display: none; }
 #search-results { list-style: none; margin: 0 auto; padding: 0 0 calc(var(--safe-b) + 24px); overflow-y: auto; max-width: 640px; width: 100%; flex: 1; }
 #search-results button {
   width: 100%; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; text-align: left;
@@ -315,8 +321,19 @@ body.has-panel .dock * { pointer-events: none !important; }
 .keys dt { font-family: var(--f-ui); font-weight: 600; font-size: 11.5px; color: var(--fg); background: rgba(150,196,214,.12); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; text-align: center; white-space: nowrap; }
 .keys dd { margin: 0; }
 #hint li svg { width: 20px; height: 20px; stroke: var(--xray); fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.hint-credit { margin: 12px 0 0; font-size: 11px; line-height: 1.45; color: var(--faint); }
-.hint-credit a { color: var(--muted); }
+.hint-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.link-btn { background: none; border: 0; padding: 6px 2px; cursor: pointer; color: var(--muted); font-family: var(--f-ui); font-size: 12px; letter-spacing: 0.04em; text-decoration: underline dotted rgba(149, 168, 182, 0.6); text-underline-offset: 3px; }
+.link-btn:hover { color: var(--fg); }
+#about { position: fixed; inset: 0; z-index: 45; display: grid; place-items: center; padding: calc(var(--safe-t) + 16px) 16px calc(var(--safe-b) + 16px); background: rgba(7, 12, 17, 0.6); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); opacity: 0; transition: opacity .2s; }
+#about.open { opacity: 1; }
+.about-card { position: relative; width: 100%; max-width: 520px; max-height: 100%; overflow-y: auto; padding: 18px 20px 16px; border-radius: 18px; background: var(--glass-strong); border: 1px solid var(--line-strong); }
+.about-card h2 { margin: 0 44px 6px 0; font-family: var(--f-display); font-weight: 400; font-size: 24px; }
+.about-card h3 { margin: 14px 0 6px; font-family: var(--f-ui); font-weight: 600; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--xray); }
+.about-card ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 13px; line-height: 1.5; color: #d5dee4; }
+.about-card b { font-weight: 600; color: var(--fg); }
+.about-card a { color: var(--fg); text-decoration: underline; text-decoration-color: rgba(149, 168, 182, 0.6); text-underline-offset: 2px; overflow-wrap: anywhere; }
+.about-lede { margin: 0; font-size: 13.5px; color: var(--muted); line-height: 1.5; }
+.about-close { position: absolute; top: 10px; right: 10px; }
 #hint-ok { height: 36px; padding: 0 16px; border-radius: 10px; border: 0; background: var(--plate); color: var(--plate-ink); font-family: var(--f-ui); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; font-size: 12.5px; cursor: pointer; }
 #toast {
   position: fixed; left: 50%; bottom: calc(var(--safe-b) + 132px); transform: translate(-50%, 8px); z-index: 50; text-align: center;
@@ -325,8 +342,6 @@ body.has-panel .dock * { pointer-events: none !important; }
   opacity: 0; transition: opacity .25s, transform .25s;
 }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
-.sheet-credit { margin: 14px 0 4px; font-size: 11px; line-height: 1.45; color: var(--faint); }
-.sheet-credit a { color: var(--muted); }
 .credit { position: fixed; left: 16px; bottom: calc(var(--safe-b) + 112px); font-size: 10.5px; color: var(--faint); pointer-events: auto; max-width: 60vw; display: none; }
 .credit a { color: var(--muted); }
 
@@ -467,6 +482,23 @@ input[type="range"] { width: 100%; accent-color: var(--xray); height: 28px; }
   .zoom-btn { display: grid !important; }
   .keys { display: block; }
 }
+@media (min-width: 820px) {
+  /* a search field in the top bar, opening a drop-down under it */
+  #btn-search.search-btn { width: auto; min-width: 250px; border-radius: 22px; padding: 0 10px 0 14px; display: flex; align-items: center; gap: 10px; color: var(--muted); }
+  #btn-search .search-lbl { display: block; flex: 1; text-align: left; font-size: 14px; }
+  #btn-search .search-kbd { display: block; font-family: var(--f-ui); font-size: 11.5px; font-weight: 600; color: var(--fg); background: rgba(150,196,214,.12); border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px; }
+  #btn-search:hover { color: var(--fg); border-color: var(--line-strong); }
+  #search {
+    inset: auto; top: calc(var(--safe-t) + 10px); right: 66px; width: min(480px, calc(100vw - 120px)); max-height: min(72vh, 680px);
+    padding: 12px 12px 4px; border-radius: 20px; border: 1px solid var(--line-strong); background: var(--glass-strong);
+    box-shadow: 0 16px 48px rgba(0,0,0,.5); transform: translateY(-6px); transition: opacity .18s, transform .18s;
+  }
+  #search.open { transform: none; }
+  #search-input { height: 44px; font-size: 15px; }
+  #search-results { padding-bottom: 8px; }
+  #search-results button { padding: 10px 6px; border-radius: 10px; border-bottom: 0; }
+  #search-results button:hover, #search-results button:focus-visible { background: rgba(150,196,214,.09); }
+}
 /* wide desktop: one-row bottom bar (explode | layers | motion, slice, tours) */
 @media (min-width: 1500px) {
   .dock { flex-direction: row; align-items: center; gap: 12px; padding: 0 16px calc(var(--safe-b) + 14px); }
@@ -509,8 +541,9 @@ input[type="range"] { width: 100%; accent-color: var(--xray); height: 28px; }
     </div>
   </div>
   <div class="top-actions">
-    <button class="icon-btn" id="btn-search" type="button" aria-label="Find a body part">
+    <button class="icon-btn search-btn" id="btn-search" type="button" aria-label="Search the body">
       <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>
+      <span class="search-lbl">Search the body</span><kbd class="search-kbd">/</kbd>
     </button>
     <button class="icon-btn" id="btn-help" type="button" aria-label="How to use">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.3 2.4c-.6.3-.9.8-.9 1.5v.6"/><path d="M12 17h.01"/></svg>
@@ -582,7 +615,7 @@ input[type="range"] { width: 100%; accent-color: var(--xray); height: 28px; }
     <h2 id="sheet-title"></h2>
     <div class="meta-row"><span id="sheet-path"></span><span class="size" id="sheet-size" title="Largest dimension in this model"></span></div>
   </div>
-  <div id="sheet-scroll"><div id="sheet-body"></div><p class="sheet-credit">3D model: <a href="https://www.z-anatomy.com" target="_blank" rel="noopener">Z-Anatomy</a> (CC BY-SA 4.0), from BodyParts3D © DBCLS. Female body shape from <a href="http://www.makehumancommunity.org" target="_blank" rel="noopener">MakeHuman</a> (CC0). Atlas notes adapted from Wikipedia (CC BY-SA).</p></div>
+  <div id="sheet-scroll"><div id="sheet-body"></div></div>
   <div class="sheet-actions">
     <button type="button" id="btn-focus">Focus</button>
     <button type="button" id="btn-isolate" aria-pressed="false">Isolate</button>
@@ -660,12 +693,15 @@ input[type="range"] { width: 100%; accent-color: var(--xray); height: 28px; }
 
 <div id="search" hidden role="dialog" aria-label="Find a body part">
   <div class="search-bar">
-    <input id="search-input" type="search" placeholder="Search 3,000 parts: femur, uterus, aorta" autocomplete="off" spellcheck="false" enterkeyhint="search">
+    <input id="search-input" type="search" placeholder="Any part: femur, kneecap, aorta, womb…" autocomplete="off" spellcheck="false" enterkeyhint="search" aria-label="Search the body">
     <button class="icon-btn" id="search-close" type="button" aria-label="Close search">
       <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
     </button>
   </div>
-  <div id="search-hint">Popular</div>
+  <div class="search-sub">
+    <div id="search-hint">Popular</div>
+    <div id="search-mode" role="group" aria-label="Open results in"><span>Open in</span><button type="button" data-mode="focus" aria-pressed="true">Focus</button><button type="button" data-mode="isolate" aria-pressed="false">Isolate</button></div>
+  </div>
   <ul id="search-results"></ul>
 </div>
 
@@ -696,8 +732,31 @@ input[type="range"] { width: 100%; accent-color: var(--xray); height: 28px; }
       <dt>1–8</dt><dd>Show or hide a layer</dd><dt>Esc</dt><dd>Close / deselect</dd>
     </dl>
   </div>
-  <button id="hint-ok" type="button">Got it</button>
-  <p class="hint-credit">3D anatomy from <a href="https://www.z-anatomy.com" target="_blank" rel="noopener">Z-Anatomy</a> (CC BY-SA 4.0), built on BodyParts3D © DBCLS (CC BY-SA 2.1 JP). The female body shape is adapted from <a href="http://www.makehumancommunity.org" target="_blank" rel="noopener">MakeHuman</a>'s average adult woman (CC0); female reproductive organs and breast tissue are modeled from standard adult measurements.</p>
+  <div class="hint-foot"><button id="hint-ok" type="button">Got it</button><button id="btn-about" type="button" class="link-btn">About &amp; sources</button></div>
+</div>
+
+<div id="about" hidden role="dialog" aria-modal="true" aria-labelledby="about-title">
+  <div class="about-card">
+    <button class="icon-btn about-close" id="about-close" type="button" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    <h2 id="about-title">About &amp; sources</h2>
+    <p class="about-lede">An interactive 3D atlas of the human body, made for learning. It is not medical advice.</p>
+    <h3>Anatomy</h3>
+    <ul>
+      <li><b>3D models:</b> <a href="https://www.z-anatomy.com" target="_blank" rel="noopener">Z-Anatomy</a> (CC BY-SA 4.0), built on BodyParts3D © The Database Center for Life Science (CC BY-SA 2.1 Japan). The converted models are shared under CC BY-SA 4.0.</li>
+      <li><b>Female body shape:</b> adapted from <a href="http://www.makehumancommunity.org" target="_blank" rel="noopener">MakeHuman</a>'s average adult man and woman (CC0).</li>
+      <li><b>Modeled for this app:</b> the female reproductive organs, breast tissue and pudendal region (from standard adult measurements), and the hair.</li>
+    </ul>
+    <h3>Text</h3>
+    <ul>
+      <li><b>Atlas notes:</b> adapted from Wikipedia articles bundled with Z-Anatomy (CC BY-SA).</li>
+      <li><b>Part descriptions and tours:</b> written for this app.</li>
+    </ul>
+    <h3>Software</h3>
+    <ul>
+      <li><a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> (MIT), <a href="https://github.com/pmndrs/postprocessing" target="_blank" rel="noopener">postprocessing</a> (Zlib), <a href="https://github.com/N8python/n8ao" target="_blank" rel="noopener">N8AO</a> (ISC) and <a href="https://github.com/zeux/meshoptimizer" target="_blank" rel="noopener">meshoptimizer</a> (MIT).</li>
+      <li><b>Source code:</b> <a href="https://github.com/jayman1972/jayman1972-visible-human" target="_blank" rel="noopener">github.com/jayman1972/jayman1972-visible-human</a></li>
+    </ul>
+  </div>
 </div>
 
 <div id="hover-tip" aria-hidden="true"><span class="dot"></span><span class="nm"></span><span class="side"></span></div>

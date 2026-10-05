@@ -76,3 +76,6 @@ The `pipeline/` scripts need the Z-Anatomy PC version, MakeHuman's data files an
   shoulders, limbs and face.
 - The female reproductive organs, breast tissue and the pudendal region are modeled
   procedurally from standard adult measurements. They are not scan-based.
+- The female face refinements (`pipeline/face.mjs`) and the hair, eyebrows and eyelashes shown
+  with solid skin (`pipeline/hair.mjs`) are generated for this app.
+- In the app, the credits and licenses are under Help (?) › About & sources.
