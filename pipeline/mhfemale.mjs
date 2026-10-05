@@ -41,6 +41,19 @@ function breastList(size, firm) {
   return [[`${pre}${cup[0]}-averagefirmness.target`, cup[1] * (1 - fm[1])], [`${pre}${cup[0]}-${fm[0]}.target`, cup[1] * fm[1]], [`${pre}averagecup-${fm[0]}.target`, (1 - cup[1]) * fm[1]]];
 }
 
+// body build as MakeHuman's macro sliders blend it (0..1, 0.5 = average): muscle and weight pick
+// among its universal targets bilinearly; proportions above 0.5 blend in its "ideal proportions"
+function bodyList(muscle, weight, proportions) {
+  const lv = (v, nm) => (v < 0.5 ? [[`min${nm}`, (0.5 - v) * 2], [`average${nm}`, 1 - (0.5 - v) * 2]] : [[`average${nm}`, 1 - (v - 0.5) * 2], [`max${nm}`, (v - 0.5) * 2]]);
+  const pw = Math.max(0, (proportions - 0.5) * 2), out = [];
+  for (const [m, wm] of lv(muscle, 'muscle')) for (const [w, ww] of lv(weight, 'weight')) {
+    if (!(wm * ww)) continue;
+    if (m !== 'averagemuscle' || w !== 'averageweight') out.push([`macrodetails/universal-female-young-${m}-${w}.target`, wm * ww]);
+    if (pw) out.push([`macrodetails/proportions/female-young-${m}-${w}-idealproportions.target`, wm * ww * pw]);
+  }
+  return out;
+}
+
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
@@ -88,7 +101,7 @@ function closestOnTri(p, a, b, c) {
  * opts: female age, breast size/firmness, weight, height ratio
  */
 export function makeFemaleTransfer(our, opts = {}) {
-  const { age = 30, breastSize = 0.68, breastFirmness = 0.42, weight = 0.56, heightRatio = 0.94, log = console.log } = opts;
+  const { age = 30, breastSize = 0.68, breastFirmness = 0.42, weight = 0.56, muscle = 0.5, proportions = 0.5, heightRatio = 0.94, breastFrom = null, extra = [], log = console.log } = opts;
   const { V, groups } = loadObj(BASE);
   const quads = groups.body;
   const bodySet = new Set(quads.flat());
@@ -105,9 +118,15 @@ export function makeFemaleTransfer(our, opts = {}) {
 
   // shapes
   const M = applyTargets(V, genderList('male', 25));
-  const fList = [...genderList('female', age), ...breastList(breastSize, breastFirmness),
-    ['macrodetails/universal-female-young-averagemuscle-maxweight.target', Math.max(0, (weight - 0.5) * 2)]];
-  let F = applyTargets(V, fList);
+  const female = (b, more = []) => applyTargets(V, [...genderList('female', age), ...breastList(breastSize, breastFirmness), ...bodyList(b.muscle, b.weight, b.proportions), ...more]);
+  // extra regional modifiers ([target, weight]; "armslegs/*-..." means both sides)
+  const extras = extra.flatMap(([rel, w]) => (rel.includes('/*-') ? [[rel.replace('/*-', '/l-'), w], [rel.replace('/*-', '/r-'), w]] : [[rel, w]]));
+  let F = female({ muscle, weight, proportions }, extras);
+  // breasts kept as they are in another build (breastFrom): blended in by MakeHuman's breast weights
+  if (breastFrom) {
+    const F0 = female({ muscle: 0.5, proportions: 0.5, ...breastFrom });
+    for (const i of ids) { const t = Math.min(1, Math.max(0, (wBreast[i] - 0.05) / 0.35)), k = t * t * (3 - 2 * t); if (k > 0) for (let a = 0; a < 3; a++) F[i][a] += (F0[i][a] - F[i][a]) * k; }
+  }
   const heightOf = (P) => { let mn = Infinity, mx = -Infinity; for (const i of ids) { mn = Math.min(mn, P[i][1]); mx = Math.max(mx, P[i][1]); } return mx - mn; };
   // MakeHuman's average woman is ~8% shorter; nudge to the requested ratio with its height target
   const h0 = heightOf(F), hM = heightOf(M);
@@ -115,7 +134,7 @@ export function makeFemaleTransfer(our, opts = {}) {
   const F1 = F.map((v) => v.slice()); for (const [i, d] of hT) { F1[i][0] += d[0]; F1[i][1] += d[1]; F1[i][2] += d[2]; }
   const hw = Math.max(0, Math.min(1, (heightRatio * hM - h0) / (heightOf(F1) - h0)));
   F = applyTargets(F, [['macrodetails/height/female-young-averagemuscle-averageweight-maxheight.target', hw]]);
-  log(`makehuman: male ${hM.toFixed(2)} dm, female ${heightOf(F).toFixed(2)} dm (height target ${hw.toFixed(2)}), age ${age}, breast ${breastSize}/${breastFirmness}`);
+  log(`makehuman: male ${hM.toFixed(2)} dm, female ${heightOf(F).toFixed(2)} dm (height target ${hw.toFixed(2)}), age ${age}, breast ${breastSize}/${breastFirmness}, muscle ${muscle}, weight ${weight}, proportions ${proportions}`);
 
   // similarity transform male -> our space: scale by height, feet on the floor, centred, depth by hips+shoulders
   const s = our.height / hM;
