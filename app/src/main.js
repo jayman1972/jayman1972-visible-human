@@ -7,6 +7,7 @@ import { lookupInfo, prettyName } from './content.js';
 import { Physiology, SYSTEMS as PHYS } from './physiology.js';
 import { SoundEngine } from './audio.js';
 import { TOURS } from './tours.js';
+import { buildExplode, explodeOffset, phase } from './explode.js';
 
 const DATA = 'data/';
 const $ = (s) => document.querySelector(s);
@@ -16,32 +17,22 @@ const stage = $('#stage');
 // ---------------------------------------------------------------------------
 // Layers (outermost first; also drives the explode stagger)
 // ---------------------------------------------------------------------------
+// base: push away from the region axis; rmul / amul: how far the layer's groups spread away from /
+// along it (inner layers a little more, so they come out from behind the bones); delay: inner layers
+// start each explode phase slightly later
 const LAYERS = [
-  { id: 'skin', label: 'Skin', dot: '#e3b896', on: true, base: 0.14, rmul: 1.0, amul: 1.0, t0: 0.0, t1: 0.42 },
-  { id: 'muscles', label: 'Muscles', dot: '#b4372f', on: false, base: 0.09, rmul: 1.0, amul: 1.0, t0: 0.08, t1: 0.56 },
-  { id: 'joints', label: 'Ligaments', dot: '#a9cdd7', on: false, base: 0.05, rmul: 1.0, amul: 1.05, t0: 0.16, t1: 0.66 },
-  { id: 'skeleton', label: 'Skeleton', dot: '#e9dfc6', on: true, base: 0.06, rmul: 0.9, amul: 1.0, t0: 0.22, t1: 0.74 },
-  { id: 'lymph', label: 'Lymph nodes', dot: '#d9b38c', on: false, base: 0.04, rmul: 1.3, amul: 1.1, t0: 0.28, t1: 0.82 },
-  { id: 'vessels', label: 'Heart & vessels', dot: '#d0262c', on: true, base: 0.03, rmul: 1.2, amul: 1.1, t0: 0.32, t1: 0.86 },
-  { id: 'nerves', label: 'Brain & nerves', dot: '#f0cc4e', on: true, base: 0.02, rmul: 1.2, amul: 1.1, t0: 0.38, t1: 0.93 },
-  { id: 'organs', label: 'Organs', dot: '#d98a7a', on: true, base: 0.0, rmul: 2.4, amul: 1.7, t0: 0.44, t1: 1.0 },
+  { id: 'skin', label: 'Skin', dot: '#e3b896', on: true, base: 0.14, rmul: 1.0, amul: 1.0, delay: 0 },
+  { id: 'muscles', label: 'Muscles', dot: '#b4372f', on: false, base: 0.09, rmul: 1.0, amul: 1.0, delay: 0.015 },
+  { id: 'joints', label: 'Ligaments', dot: '#a9cdd7', on: false, base: 0.05, rmul: 1.0, amul: 1.03, delay: 0.03 },
+  { id: 'skeleton', label: 'Skeleton', dot: '#e9dfc6', on: true, base: 0.06, rmul: 0.9, amul: 1.0, delay: 0.04 },
+  { id: 'lymph', label: 'Lymph nodes', dot: '#d9b38c', on: false, base: 0.04, rmul: 1.2, amul: 1.05, delay: 0.05 },
+  { id: 'vessels', label: 'Heart & vessels', dot: '#d0262c', on: true, base: 0.03, rmul: 1.15, amul: 1.05, delay: 0.06 },
+  { id: 'nerves', label: 'Brain & nerves', dot: '#f0cc4e', on: true, base: 0.02, rmul: 1.15, amul: 1.05, delay: 0.075 },
+  { id: 'organs', label: 'Organs', dot: '#d98a7a', on: true, base: 0.0, rmul: 1.7, amul: 1.3, delay: 0.09 },
 ];
 const LAYER = Object.fromEntries(LAYERS.map((l) => [l.id, l]));
 const SYSTEM_IDS_NON_SKIN = LAYERS.map((l) => l.id).filter((id) => id !== 'skin');
 const LOAD_ORDER = ['skeleton', 'organs', 'skin', 'vessels', 'nerves', 'muscles', 'joints', 'lymph'];
-
-const REGIONS = (() => {
-  const r = [
-    { id: 'head', a: [0, 1.52, 0.0], b: [0, 1.76, 0.0], rad: 0.11, off: [0, 0.34, 0], along: 0.45, radial: 0.95, pivot: 'mid' },
-    { id: 'neck', a: [0, 1.43, -0.01], b: [0, 1.52, 0.0], rad: 0.07, off: [0, 0.17, 0], along: 0.8, radial: 0.9, pivot: 'mid' },
-    { id: 'torso', a: [0, 0.84, 0.0], b: [0, 1.43, 0.0], rad: 0.17, off: [0, 0, 0], along: 0.62, radial: 0.75, pivot: 'mid' },
-  ];
-  const arm = { a: [0.18, 1.4, -0.03], b: [0.285, 0.7, 0.08], rad: 0.06, off: [0.13, 0.06, 0], along: 0.38, radial: 1.0, pivot: 'a' };
-  const leg = { a: [0.085, 0.9, -0.01], b: [0.095, 0.0, 0.03], rad: 0.085, off: [0.05, -0.3, 0], along: 0.32, radial: 1.0, pivot: 'a' };
-  const mirror = (o, id, s) => ({ ...o, id, a: [o.a[0] * s, o.a[1], o.a[2]], b: [o.b[0] * s, o.b[1], o.b[2]], off: [o.off[0] * s, o.off[1], o.off[2]] });
-  r.push(mirror(arm, 'armL', 1), mirror(arm, 'armR', -1), mirror(leg, 'legL', 1), mirror(leg, 'legR', -1));
-  return r.map((g) => ({ ...g, A: new THREE.Vector3(...g.a), B: new THREE.Vector3(...g.b), OFF: new THREE.Vector3(...g.off) }));
-})();
 
 const HOLLOW = /oesophagus|stomach|duodenum|jejunum|ileum|colon|appendix|urinary bladder|gallbladder|trachea|bronch|ureter|urethra|renal pelvis|bile duct|pancreatic duct|ductus deferens/i;
 
@@ -87,7 +78,7 @@ let partState, userHidden, defaultHidden;
 let selSet = new Set();
 const groupIndex = new Map();
 const state = {
-  t: 0, tShown: -1, vel: 0, anim: null, selected: -1, selGroup: null, isolated: false, skinMode: 'clear', pg: false, pgAnim: null,
+  t: 0, tShown: -1, tGoal: null, vel: 0, anim: null, selected: -1, selGroup: null, isolated: false, skinMode: 'clear', pg: false, pgAnim: null,
   spin: false, needsRender: true, camAnim: null,
   female: 0, fT: 0, fAnim: null,
   clip: { on: false, scope: 'part', axis: 'sagittal', pos: 0, flip: false },
@@ -167,27 +158,15 @@ function syncVisibility() {
 // ---------------------------------------------------------------------------
 // Explode math (computed for male and female shapes, blended by the morph)
 // ---------------------------------------------------------------------------
-const _q = new THREE.Vector3(), _r = new THREE.Vector3(), _ab = new THREE.Vector3(), _p = new THREE.Vector3();
-function closestOnSeg(c, A, B, out) {
-  _ab.subVectors(B, A);
-  const s = THREE.MathUtils.clamp(_p.subVectors(c, A).dot(_ab) / _ab.lengthSq(), 0, 1);
-  return out.copy(A).addScaledVector(_ab, s);
-}
-// How far apart the parts sit when fully exploded (scales every offset below).
+// How far apart the parts sit when fully exploded (scales every offset), and the extra sideways
+// spread on wide screens (set from the viewport; phones stay at 1).
 const SPREAD = 1.9;
-function explodeVector(p, c) {
-  let best = null, bestD = Infinity;
-  for (const g of REGIONS) { closestOnSeg(p.c, g.A, g.B, _q); const d = _q.distanceTo(p.c) / g.rad; if (d < bestD) { bestD = d; best = g; } }
-  const g = best;
-  closestOnSeg(c, g.A, g.B, _q);
-  _r.subVectors(c, _q);
-  const pivot = g.pivot === 'a' ? g.A.clone() : g.A.clone().add(g.B).multiplyScalar(0.5);
-  const L = LAYER[p.sys];
-  const qNew = pivot.clone().addScaledVector(_q.clone().sub(pivot), 1 + g.along * L.amul * SPREAD).addScaledVector(g.OFF, SPREAD);
-  const rLen = _r.length();
-  const rhat = rLen > 1e-3 ? _r.clone().divideScalar(rLen) : new THREE.Vector3(0, 0, 1);
-  return qNew.addScaledVector(_r, 1 + g.radial * L.rmul * SPREAD).addScaledVector(rhat, L.base * SPREAD).sub(c);
+let explodeKX = 1;
+function rebuildExplode() {
+  buildExplode(parts, LAYER, { spread: SPREAD, kx: explodeKX });
+  computeLayerBounds();
 }
+const easeSine = (x) => 0.5 - 0.5 * Math.cos(Math.PI * x);
 const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
 // The skin fades out as soon as the body starts to come apart (it hides everything else when
 // exploded). It stays if it is the only layer shown, or if a skin part is selected.
@@ -197,32 +176,26 @@ function skinFade(t) {
   const k = THREE.MathUtils.clamp((t - 0.03) / 0.2, 0, 1);
   return 1 - k * k * (3 - 2 * k);
 }
-function layerProgress(sys, t) { const L = LAYER[sys]; return ease(THREE.MathUtils.clamp((t - L.t0) / (L.t1 - L.t0), 0, 1)); }
 
 const _w = [0, 0, 0];
 function femaleCenter(p) { return new THREE.Vector3(...p.cFem); } // computed by the build (female shape data)
+const _eo = new THREE.Vector3();
 function partCenterNow(p, out) {
-  const f = state.fT;
-  out.copy(p.c).lerp(p.cF, f);
-  const e = layerProgress(p.sys, state.t);
-  out.x += (p.Dm.x + (p.Df.x - p.Dm.x) * f) * e;
-  out.y += (p.Dm.y + (p.Df.y - p.Dm.y) * f) * e;
-  out.z += (p.Dm.z + (p.Df.z - p.Dm.z) * f) * e;
-  return out;
+  out.copy(p.c).lerp(p.cF, state.fT);
+  return out.add(explodeOffset(p, state.t, state.fT, _eo));
 }
 
 function writePartTexture() {
   const t = state.t, f = state.fT;
-  const k = {}; for (const L of LAYERS) k[L.id] = layerProgress(L.id, t);
   for (let i = 0; i < N; i++) {
-    const p = parts[i], e = k[p.sys];
-    partTexData[i * 4] = (p.Dm.x + (p.Df.x - p.Dm.x) * f) * e;
-    partTexData[i * 4 + 1] = (p.Dm.y + (p.Df.y - p.Dm.y) * f) * e;
-    partTexData[i * 4 + 2] = (p.Dm.z + (p.Df.z - p.Dm.z) * f) * e;
+    const p = parts[i];
+    explodeOffset(p, t, f, _eo);
+    partTexData[i * 4] = _eo.x; partTexData[i * 4 + 1] = _eo.y; partTexData[i * 4 + 2] = _eo.z;
     partTexData[i * 4 + 3] = partState[i] + (p.hi ? 10 : 0);
   }
   partTex.needsUpdate = true;
-  U.uSkinA.value.set(0.035 + 0.07 * k.skin, 0.5 + 0.15 * k.skin);
+  const ks = phase('region', t);
+  U.uSkinA.value.set(0.035 + 0.07 * ks, 0.5 + 0.15 * ks);
   applySkinFade();
   state.tShown = t;
   state.needsRender = true;
@@ -239,31 +212,40 @@ function staticTexture(fill) {
 // ---------------------------------------------------------------------------
 // Camera framing between UI bars
 // ---------------------------------------------------------------------------
-const layerBounds = {};
+// Each layer's extent, sampled along the explode (male and female shapes)
+const NB = 41, layerBounds = {};
 function computeLayerBounds() {
-  for (const L of LAYERS) layerBounds[L.id] = { m0: new THREE.Box3(), m1: new THREE.Box3(), f0: new THREE.Box3(), f1: new THREE.Box3() };
-  const h = new THREE.Vector3(), c = new THREE.Vector3();
-  for (const p of parts) {
-    if (p.hidden) continue;
-    const lb = layerBounds[p.sys];
-    h.set(p.ext[0] / 2, p.ext[1] / 2, p.ext[2] / 2);
-    if (p.sex !== 2) { lb.m0.expandByPoint(c.copy(p.c).sub(h)); lb.m0.expandByPoint(c.copy(p.c).add(h)); c.copy(p.c).add(p.Dm); lb.m1.expandByPoint(c.clone().sub(h)); lb.m1.expandByPoint(c.add(h)); }
-    if (p.sex !== 1) { lb.f0.expandByPoint(c.copy(p.cF).sub(h)); lb.f0.expandByPoint(c.copy(p.cF).add(h)); c.copy(p.cF).add(p.Df); lb.f1.expandByPoint(c.clone().sub(h)); lb.f1.expandByPoint(c.add(h)); }
+  const h = new THREE.Vector3(), c = new THREE.Vector3(), o = new THREE.Vector3();
+  for (const L of LAYERS) layerBounds[L.id] = { m: [], f: [] };
+  for (let i = 0; i < NB; i++) {
+    const t = i / (NB - 1);
+    for (const L of LAYERS) { layerBounds[L.id].m.push(new THREE.Box3()); layerBounds[L.id].f.push(new THREE.Box3()); }
+    for (const p of parts) {
+      if (p.hidden) continue;
+      const lb = layerBounds[p.sys];
+      h.set(p.ext[0] / 2, p.ext[1] / 2, p.ext[2] / 2);
+      if (p.sex !== 2) { c.copy(p.c).add(explodeOffset(p, t, 0, o)); lb.m[i].expandByPoint(o.copy(c).sub(h)); lb.m[i].expandByPoint(c.add(h)); }
+      if (p.sex !== 1) { c.copy(p.cF).add(explodeOffset(p, t, 1, o)); lb.f[i].expandByPoint(o.copy(c).sub(h)); lb.f[i].expandByPoint(c.add(h)); }
+    }
   }
+  fitTable.key = '';
 }
 function layerOn(id) { return id === 'skin' ? state.skinMode !== 'off' : systems[id] && systems[id].on; }
 const _bb = new THREE.Box3(), _lb = new THREE.Box3(), _lb2 = new THREE.Box3();
 const _bs = new THREE.Box3();
+function lerpBox(arr, t, out) {
+  const x = THREE.MathUtils.clamp(t, 0, 1) * (NB - 1), i = Math.min(NB - 2, Math.floor(x)), u = x - i;
+  out.min.lerpVectors(arr[i].min, arr[i + 1].min, u); out.max.lerpVectors(arr[i].max, arr[i + 1].max, u);
+  return out;
+}
 function sceneBounds(t) {
   _bb.makeEmpty(); _bs.makeEmpty();
   const sf = skinFade(t);
   for (const L of LAYERS) {
     if (!layerOn(L.id)) continue;
     const b = layerBounds[L.id];
-    if (b.m0.isEmpty()) continue;
-    const e = layerProgress(L.id, t);
-    _lb.min.lerpVectors(b.m0.min, b.m1.min, e); _lb.max.lerpVectors(b.m0.max, b.m1.max, e);
-    _lb2.min.lerpVectors(b.f0.min, b.f1.min, e); _lb2.max.lerpVectors(b.f0.max, b.f1.max, e);
+    if (!b || b.m[0].isEmpty()) continue;
+    lerpBox(b.m, t, _lb); lerpBox(b.f, t, _lb2);
     _lb.min.lerp(_lb2.min, state.fT); _lb.max.lerp(_lb2.max, state.fT);
     if (L.id === 'skin') _bs.copy(_lb); else _bb.union(_lb);
   }
@@ -330,7 +312,7 @@ function applyViewOffset(pr = 1, px = null, py = null) {
   if (px === null) camera.setViewOffset(view.fullW, view.fullH, view.ox, view.oy, view.w, view.h);
   else camera.setViewOffset(view.fullW * pr, view.fullH * pr, (view.ox + px) * pr, (view.oy + py) * pr, 1, 1);
 }
-function fitDistance(t) {
+function fitDistanceRaw(t) {
   const b = sceneBounds(t);
   const H = (b.max.y - b.min.y) * 1.03, Wd = b.max.x - b.min.x;
   const availH = Math.max(120, view.h - view.top - (view.baseBottom ?? view.bottom));
@@ -338,14 +320,36 @@ function fitDistance(t) {
   const k = view.h / (2 * Math.tan(THREE.MathUtils.degToRad(BASE_FOV) / 2));
   return Math.max(H / availH, Wd / availW) * k + (b.max.z - b.min.z) / 2;
 }
-function fitCenterY(t) { const b = sceneBounds(t); return (b.min.y + b.max.y) / 2; }
+// Tabulated over t: the distance never shrinks as t grows (the skin bursting outward and then
+// fading would otherwise zoom out and back in), and the centre height follows the bounds.
+const NF = 65, fitTable = { key: '', d: new Float64Array(NF), y: new Float64Array(NF) };
+function fitKey() {
+  return [LAYERS.map((L) => (layerOn(L.id) ? 1 : 0)).join(''), state.skinMode, state.fT.toFixed(3), view.w, view.h, view.top, view.baseBottom ?? view.bottom, view.left, view.right, skinFade(0.5)].join('|');
+}
+function ensureFitTable() {
+  const key = fitKey();
+  if (key === fitTable.key) return;
+  fitTable.key = key;
+  let m = 0;
+  for (let i = 0; i < NF; i++) {
+    const t = i / (NF - 1);
+    m = Math.max(m, fitDistanceRaw(t)); fitTable.d[i] = m;
+    const b = sceneBounds(t); fitTable.y[i] = (b.min.y + b.max.y) / 2;
+  }
+}
+function fitLookup(arr, t) { ensureFitTable(); const x = THREE.MathUtils.clamp(t, 0, 1) * (NF - 1), i = Math.min(NF - 2, Math.floor(x)), u = x - i; return arr[i] * (1 - u) + arr[i + 1] * u; }
+function fitDistance(t) { return fitLookup(fitTable.d, t); }
+function fitCenterY(t) { return fitLookup(fitTable.y, t); }
 let lastFit = null;
 function applyAutoFit() {
   const now = { d: fitDistance(state.t), y: fitCenterY(state.t) };
   if (lastFit) {
-    const off = camera.position.clone().sub(controls.target).multiplyScalar(now.d / lastFit.d);
-    controls.target.y += now.y - lastFit.y;
-    camera.position.copy(controls.target).add(off);
+    const k = now.d / lastFit.d, dy = now.y - lastFit.y;
+    const adj = (T, P) => { const off = P.clone().sub(T).multiplyScalar(k); T.y += dy; P.copy(T).add(off); };
+    adj(controls.target, camera.position);
+    // a refit in progress (after a layer toggle) gets the same adjustment; other camera moves
+    // (Restore, tours, focusing a part) already aim at their final framing
+    const c = state.camAnim; if (c && c.fit) { adj(c.target, c.position); adj(c.fromT, c.fromP); }
   }
   lastFit = now;
 }
@@ -354,9 +358,11 @@ function refit(dur = 500) {
   if (lastFit) {
     const k = next.d / lastFit.d;
     if (Math.abs(k - 1) > 0.02 || Math.abs(next.y - lastFit.y) > 0.01) {
-      const off = camera.position.clone().sub(controls.target).multiplyScalar(k);
-      const tgt = controls.target.clone(); tgt.y += next.y - lastFit.y;
-      animateCamera(tgt, tgt.clone().add(off), dur);
+      // build on a camera move still in progress (two refits in one frame), not on where it started
+      const baseT = state.camAnim ? state.camAnim.target : controls.target, baseP = state.camAnim ? state.camAnim.position : camera.position;
+      const off = baseP.clone().sub(baseT).multiplyScalar(k);
+      const tgt = baseT.clone(); tgt.y += next.y - lastFit.y;
+      animateCamera(tgt, tgt.clone().add(off), dur); state.camAnim.fit = true;
     }
   }
   lastFit = next;
@@ -383,8 +389,8 @@ function restoreAll() {
   if (selSet.size || state.isolated) clearSelection(); else recomputeStates();
   if (state.spin) $('#btn-spin').click();
   // explode back together and fly the camera home over the same time, so they finish together
-  const dur = state.t > 0.001 ? 2600 * 0.5 * state.t + 300 : 0;
-  if (dur) { state.vel = 0; state.anim = { from: state.t, to: 0, t0: performance.now(), dur }; }
+  const dur = state.t > 0.001 ? 2600 * state.t + 300 : 0;
+  if (dur) { state.vel = 0; state.tGoal = null; state.anim = { from: state.t, to: 0, t0: performance.now(), dur }; }
   requestAnimationFrame(() => setTimeout(() => {
     measureInsets();
     const d = fitDistance(0), tgt = new THREE.Vector3(0, fitCenterY(0), 0);
@@ -754,15 +760,17 @@ function setSkinMode(m) {
 // UI: explode rail
 // ---------------------------------------------------------------------------
 const rail = $('#rail'), thumb = $('#rail-thumb'), railFill = $('#rail-fill'), stageLbl = $('#rail-stage'), railWrap = $('#rail-wrap');
+const STAGES = [[0.05, 'Skin'], [0.17, 'Regions'], [0.38, 'Groups'], [0.68, 'Pieces']];
 function buildRailTicks() {
-  const marks = [['skin', 'Skin'], ['muscles', 'Muscle'], ['skeleton', 'Bone'], ['organs', 'Organs']];
-  $('#rail-ticks').innerHTML = marks.map(([id, l]) => `<span class="tick" style="top:${((1 - LAYER[id].t0) * 100).toFixed(1)}%"><span>${l}</span></span>`).join('');
+  $('#rail-ticks').innerHTML = STAGES.map(([t, l]) => `<span class="tick" style="top:${((1 - t) * 100).toFixed(1)}%"><span>${l}</span></span>`).join('');
 }
 function stageName(t) {
   if (t < 0.02) return 'Assembled';
   if (t > 0.985) return 'Fully exploded';
-  let cur = LAYERS[0]; for (const L of LAYERS) if (t >= L.t0) cur = L;
-  return `Separating ${cur.label.toLowerCase()}`;
+  if (t < 0.11) return 'Removing the skin';
+  if (t < 0.3) return 'Separating body regions';
+  if (t < 0.55) return 'Separating groups';
+  return 'Separating pieces';
 }
 function updateRailUI() {
   const pct = state.t * 100;
@@ -784,6 +792,7 @@ function markRailActive() {
 let lastSnapT = 0;
 function setT(t) {
   const nt = THREE.MathUtils.clamp(t, 0, 1);
+  if (nt === state.tGoal) state.tGoal = null;
   if (nt !== state.t) markRailActive();
   if (nt === 0 && state.t > 0.02 && performance.now() - lastSnapT > 500) { sound.snap(); lastSnapT = performance.now(); }
   state.t = nt;
@@ -794,7 +803,7 @@ function setT(t) {
   const h = () => rail.getBoundingClientRect().height;
   rail.addEventListener('pointerdown', (e) => {
     dragging = true; lastY = e.clientY; lastTime = performance.now(); samples = [];
-    state.vel = 0; state.anim = null;
+    state.vel = 0; state.anim = null; state.tGoal = null;
     rail.setPointerCapture(e.pointerId);
     railWrap.classList.add('held'); markRailActive(); dismissHint(); unlockAudio();
     e.preventDefault();
@@ -816,21 +825,26 @@ function setT(t) {
   rail.addEventListener('pointerup', end); rail.addEventListener('pointercancel', end);
   rail.addEventListener('keydown', (e) => {
     const step = e.shiftKey ? 0.2 : 0.05;
-    if (['ArrowUp', 'PageUp', 'ArrowRight'].includes(e.key)) { setT(state.t + step); e.preventDefault(); }
-    if (['ArrowDown', 'PageDown', 'ArrowLeft'].includes(e.key)) { setT(state.t - step); e.preventDefault(); }
-    if (e.key === 'Home') { setT(0); e.preventDefault(); }
-    if (e.key === 'End') { setT(1); e.preventDefault(); }
+    if (['ArrowUp', 'PageUp', 'ArrowRight'].includes(e.key)) { nudgeT(step); e.preventDefault(); }
+    if (['ArrowDown', 'PageDown', 'ArrowLeft'].includes(e.key)) { nudgeT(-step); e.preventDefault(); }
+    if (e.key === 'Home') { animateT(0, 2600); e.preventDefault(); }
+    if (e.key === 'End') { animateT(1, 2600); e.preventDefault(); }
   });
   rail.addEventListener('wheel', (e) => { e.preventDefault(); e.stopPropagation(); scrollExplode(e); }, { passive: false });
 })();
+function nudgeT(d) {
+  state.anim = null; state.vel = 0;
+  state.tGoal = THREE.MathUtils.clamp((state.tGoal ?? state.t) + d, 0, 1);
+  markRailActive();
+}
 function scrollExplode(e) {
-  state.anim = null;
   const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
-  setT(state.t + (e.deltaY * unit) / 1400);
+  nudgeT((e.deltaY * unit) / 1400);
   dismissHint();
 }
 stage.addEventListener('wheel', (e) => { if (e.ctrlKey || e.metaKey) return; e.preventDefault(); e.stopPropagation(); scrollExplode(e); }, { capture: true, passive: false });
-function animateT(to, dur = 2600) { state.vel = 0; state.anim = { from: state.t, to, t0: performance.now(), dur: dur * Math.abs(to - state.t) + 200 }; }
+// a full explode or assemble takes ~3.8 s, so every phase gets time on screen
+function animateT(to, dur = 3600) { state.vel = 0; state.tGoal = null; state.anim = { from: state.t, to, t0: performance.now(), dur: dur * Math.abs(to - state.t) + 200 }; }
 
 // ---------------------------------------------------------------------------
 // UI: toolbar
@@ -1395,6 +1409,7 @@ function resize() {
   lastW = w; lastH = h;
   const prev = initialized ? fitDistance(state.t) : 0;
   measureInsets();
+  if (initialized) { const kx = wideSpread(); if (Math.abs(kx - explodeKX) > 0.02) { explodeKX = kx; rebuildExplode(); state.tShown = -1; } }
   applyViewOffset();
   pipeline.setSize(w, h);
   if (initialized) {
@@ -1406,6 +1421,29 @@ function resize() {
   state.needsRender = true;
 }
 window.addEventListener('resize', resize);
+// Wide (desktop) screens have room to spread the exploded body sideways: the sideways spread grows
+// until the fully exploded body (all layers) is about as wide, relative to its height, as the space
+// it is shown in (at most 2.4x). Phones in portrait stay at 1.
+let explodeShape = null; // { w, wo, h }: exploded width (and the part of it that is offsets) and height at kx = 1
+function wideSpread() {
+  const availW = view.w - view.left - view.right, availH = view.h - view.top - (view.baseBottom ?? view.bottom);
+  const a = availW / Math.max(1, availH);
+  if (!explodeShape || a < 0.95) return 1;
+  const want = explodeShape.h * a * 0.82; // leave some margin at the sides
+  return THREE.MathUtils.clamp(1 + (want - explodeShape.w) / Math.max(0.05, explodeShape.wo), 1, 2.4);
+}
+function measureExplodeShape() {
+  buildExplode(parts, LAYER, { spread: SPREAD, kx: 1 });
+  const b = new THREE.Box3(), b0 = new THREE.Box3(), o = new THREE.Vector3(), c = new THREE.Vector3();
+  for (const p of parts) {
+    if (p.hidden || p.sex === 2 || p.sys === 'skin') continue;
+    const h = new THREE.Vector3(p.ext[0] / 2, p.ext[1] / 2, p.ext[2] / 2);
+    c.copy(p.c).add(explodeOffset(p, 1, 0, o)); b.expandByPoint(o.copy(c).sub(h)); b.expandByPoint(c.add(h));
+    b0.expandByPoint(o.copy(p.c).sub(h)); b0.expandByPoint(o.copy(p.c).add(h));
+  }
+  const w = b.max.x - b.min.x, w0 = b0.max.x - b0.min.x;
+  explodeShape = { w, wo: Math.max(0.05, w - w0), h: b.max.y - b.min.y };
+}
 
 let lastFrame = performance.now(), lastActive = 0, idleDetailCheck = 0, prevT = 0;
 const _keyV = new THREE.Vector3();
@@ -1416,7 +1454,10 @@ function frame(now) {
   let active = false, viewMoving = false;
   if (state.anim) {
     const a = state.anim; const k = Math.min(1, (now - a.t0) / a.dur);
-    setT(a.from + (a.to - a.from) * ease(k)); if (k >= 1) state.anim = null; active = true;
+    setT(a.from + (a.to - a.from) * easeSine(k)); if (k >= 1) state.anim = null; active = true;
+  } else if (state.tGoal !== null && state.tGoal !== undefined) {
+    const g = state.tGoal, nt = state.t + (g - state.t) * (1 - Math.exp(-dt / 0.14));
+    setT(Math.abs(g - nt) < 2e-4 ? g : nt); if (state.t === g) state.tGoal = null; active = true;
   } else if (Math.abs(state.vel) > 0.0004) {
     setT(state.t + state.vel); state.vel *= 0.92; if (state.t <= 0 || state.t >= 1) state.vel = 0; active = true;
   }
@@ -1510,9 +1551,7 @@ async function init() {
   for (const p of parts) {
     p.title = prettyName(p.name);
     p.modeled = p.sex === 2 && (p.sys === 'organs' || p.name === 'Pudendal region' || /Breast|Nipple|Ovarian|Uterine artery/.test(p.name));
-    p.Dm = explodeVector(p, p.c);
     p.cF = femaleCenter(p);
-    p.Df = explodeVector(p, p.cF);
     if (HOLLOW.test(p.name) || (p.sys === 'vessels' && !/atrium|ventricle|leaflet|papillary/i.test(p.name))) p.flags |= 2;
   }
   // packs: a few sample parts for quick centre estimates, and a radius
@@ -1550,7 +1589,7 @@ async function init() {
     searchIndex.push({ kind: 'g', g, title, lc: (title + ' ' + (ALIASES[g.name] || '')).toLowerCase() });
   }
   buildLayerChips(); buildRailTicks(); buildMotionPanel(); buildTours();
-  computeLayerBounds();
+  measureInsets(); measureExplodeShape(); explodeKX = wideSpread(); rebuildExplode();
   recomputeStates();
   resize();
   const { tgt, pos } = homePose();
@@ -1577,4 +1616,4 @@ if ('serviceWorker' in navigator && !window.__VH_DATA_FORMAT__ && (location.prot
   if (ios && !standalone && !window.__VH_DATA_FORMAT__) $('#install-tip').hidden = false;
 }
 
-window.__vh = { pickAt, renderer, setT, select, selectGroup, setLayer, setSkinMode, setSex, setPG, setMotion, openSection, closeSection, startTour, parts: () => parts, state, phys, camera, controls, resetView, groupIndex, view, U, pipeline, findGroupKey, updateDetail, detail };
+window.__vh = { fitDistance, sceneBounds, pickAt, renderer, setT, select, selectGroup, setLayer, setSkinMode, setSex, setPG, setMotion, openSection, closeSection, startTour, parts: () => parts, state, phys, camera, controls, resetView, groupIndex, view, U, pipeline, findGroupKey, updateDetail, detail };
