@@ -375,6 +375,30 @@ function homePose() {
   return { tgt, pos: tgt.clone().add(new THREE.Vector3(0, 0.04, d)) };
 }
 function resetView() { const { tgt, pos } = homePose(); animateCamera(tgt, pos); lastFit = null; applyAutoFit(); }
+// Restore: back to the starting view. Reassembles the body, clears selection, isolation, slices,
+// hidden parts and open panels, stops auto-spin and flies the camera home. Layers, body, Ken/Barbie
+// mode and running animations are settings, so they are left alone.
+function restoreAll() {
+  unlockAudio(); dismissHint();
+  if (tour.active) endTour();
+  if (!searchEl.hidden) closeSearch();
+  if (state.clip.on) closeSection();
+  for (const id of ['motion', 'tours']) { const el = document.getElementById(id); if (el.classList.contains('open')) hidePanel(id); }
+  for (let i = 0; i < N; i++) if (userHidden[i] && !defaultHidden[i]) userHidden[i] = 0;
+  if (selSet.size || state.isolated) clearSelection(); else recomputeStates();
+  if (state.spin) $('#btn-spin').click();
+  // explode back together and fly the camera home over the same time, so they finish together
+  const dur = state.t > 0.001 ? 2600 * 0.5 * state.t + 300 : 0;
+  if (dur) { state.vel = 0; state.anim = { from: state.t, to: 0, t0: performance.now(), dur }; }
+  requestAnimationFrame(() => setTimeout(() => {
+    measureInsets();
+    const d = fitDistance(0), tgt = new THREE.Vector3(0, fitCenterY(0), 0);
+    animateCamera(tgt, tgt.clone().add(new THREE.Vector3(0, 0.04, d)), Math.max(900, dur));
+  }, 60));
+  sound.toggle(false);
+  showToast('Back to the starting view.');
+}
+$('#btn-restore').addEventListener('click', restoreAll);
 
 // ---------------------------------------------------------------------------
 // Selection / visibility
@@ -1272,8 +1296,8 @@ $('#btn-zoom-in').addEventListener('click', () => zoomBy(0.72));
 $('#btn-zoom-out').addEventListener('click', () => zoomBy(1 / 0.72));
 const SHORTCUT_TITLES = {
   'btn-explode': 'Explode or assemble (E)', 'btn-motion': 'Motion and sound (M)', 'btn-section': 'Cross-section (C)', 'btn-tours': 'Guided tours (T)',
-  'btn-search': 'Find a body part (/)', 'btn-help': 'How to use (?)', 'btn-reset': 'Reset the view (R)', 'btn-spin': 'Spin automatically',
-  'btn-zoom-in': 'Zoom in (+)', 'btn-zoom-out': 'Zoom out (−)', 'btn-focus': 'Zoom to the selection (F)', 'btn-isolate': 'Show only the selection (I)',
+  'btn-search': 'Find a body part (/)', 'btn-help': 'How to use (?)', 'btn-reset': 'Reset the camera (R)', 'btn-spin': 'Spin automatically',
+  'btn-restore': 'Restore the starting view (0)', 'btn-zoom-in': 'Zoom in (+)', 'btn-zoom-out': 'Zoom out (−)', 'btn-focus': 'Zoom to the selection (F)', 'btn-isolate': 'Show only the selection (I)',
   'btn-slice': 'Slice the selection (C)', 'btn-hide': 'Hide the selection (H)', 'sex-m': 'Male body (B)', 'sex-f': 'Female body (B)',
 };
 if (matchMedia('(hover: hover) and (pointer: fine)').matches) {
@@ -1316,6 +1340,7 @@ document.addEventListener('keydown', (e) => {
       const c = k.toLowerCase();
       if (c === 'e') click('btn-explode');
       else if (c === 'r') resetView();
+      else if (c === '0' || k === 'Home') restoreAll();
       else if (c === 'f') { if (selSet.size) focusIds([...selSet]); }
       else if (c === 'i') { if (selSet.size) click('btn-isolate'); }
       else if (c === 'h') { if (selSet.size) click('btn-hide'); }
