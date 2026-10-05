@@ -70,8 +70,9 @@ function look(sys, mat, name) {
     case 'Cerebellum': return R([206, 158, 152], 0.4, T.cortex);
     case 'Nucleus': case 'Nucleus (efferent fibers)': case 'Nucleus (afferent fibers)': case 'Nucleus (mixte)': return R([186, 146, 150], 0.42, T.whitematter);
     case 'Eye': return R([240, 238, 230], 0.18, T.eye);
-    case 'Cornea': return R([200, 226, 240], 0.05, T.cornea);
-    case 'Iris': return R([84, 110, 136], 0.4, T.eye);
+    // clear media (lens, vitreous, cornea): dark and glassy, so the pupil reads black
+    case 'Cornea': return R(n === 'vitreous body' ? [44, 52, 58] : [20, 24, 28], 0.04, T.cornea);
+    case 'Iris': return n === 'retina' ? R([206, 122, 104], 0.4, T.organ) : R([96, 122, 140], 0.3, T.eye); // the iris pattern is painted in the shader
     case 'LCR': return R([170, 206, 228], 0.1, T.cornea);
     case 'Mucosa':
       if (/testis/.test(n)) return R([228, 212, 200], 0.36, T.organ);
@@ -132,7 +133,8 @@ const SYSTEMS = [
   { id: 'vessels', file: 'CardioVascular41', ratio: 0.35 },
   { id: 'nerves', file: 'NervousSystem100', ratio: 0.3 },
 ];
-const HIDDEN_DEFAULT = /^(Pleura|Pericardium|Greater omentum|Lesser omentum|Mesocolon|Spinal dura|Falx cerebri|Tentorium cerebelli|Choroid plexus|Arachnoid|Cranial dura|.*bursa)/i;
+// The aqueous chamber is clear in life (drawn opaque it clouds the iris) and the zonular fibres sit behind the iris; both start hidden.
+const HIDDEN_DEFAULT = /^(Anterior chamber of eyeball|Zonular fibres|Pleura|Pericardium|Greater omentum|Lesser omentum|Mesocolon|Spinal dura|Falx cerebri|Tentorium cerebelli|Choroid plexus|Arachnoid|Cranial dura|.*bursa)/i;
 const MALE_ONLY = /^(Testis|Epididymis|Ductus deferens|Seminal gland|Prostate|Ejaculatory duct|Glans penis|Corpus cavernosum of penis|Corpus spongiosum of penis|Urethra|Dorsal artery of penis|Deep artery of penis|Deep dorsal vein of penis|Superficial dorsal veins of penis|Testicular|Right testicular|Left testicular)/;
 
 // Regions for hi-res packs and explode shaping (kept in sync with the app).
@@ -763,7 +765,25 @@ const r4 = (v) => +v.toFixed(4);
 const FEMALE_OFFSET = { 'Urinary bladder': [0, -0.006, 0.012], 'Sigmoid colon': [0, 0.004, -0.01] };
 manifest.partFields = ['id', 'sys', 'name', 'side', 'groups', 'center', 'extent', 'hidden', 'sex', 'anim', 'pivot', 'axis', 'region', 'flags', 'femaleOffset', 'pg'];
 manifest.parts = allParts.map((p) => [p.id, p.sys, p.name, p.side, p.groups.join('>'), p.c.map(r4), p.ext.map(r4), p.hidden ? 1 : 0, p.sex, p.anim, p.pivot.map(r4), p.axis.map((v) => +v.toFixed(3)), p.region, p.noBulge || 0, (FEMALE_OFFSET[p.name] || [0, 0, 0]), p.pg || 0]);
-manifest.landmarks = { aorticValve, pulmValve, rightAtrium, leftAtrium, nipples };
+// Eyes: iris centre, facing axis (least-variance direction of the iris disc) and radii, for the shader
+const eyes = [];
+for (const side of ['R', 'L']) {
+  const ir = allParts.find((p) => p.sys === 'nerves' && p.name === 'Iris' && p.side === side);
+  if (!ir) continue;
+  const P = ir.mesh.P, n = P.length / 3, c = [0, 0, 0];
+  for (let k = 0; k < P.length; k += 3) for (let a = 0; a < 3; a++) c[a] += P[k + a] / n;
+  const C = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  for (let k = 0; k < P.length; k += 3) { const d = [P[k] - c[0], P[k + 1] - c[1], P[k + 2] - c[2]]; for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) C[i][j] += d[i] * d[j] / n; }
+  const tr = C[0][0] + C[1][1] + C[2][2];
+  let v = [0, 0, 1];
+  for (let it = 0; it < 60; it++) { const w = [0, 1, 2].map((i) => tr * v[i] - (C[i][0] * v[0] + C[i][1] * v[1] + C[i][2] * v[2])); const l = Math.hypot(...w); v = w.map((x) => x / l); }
+  if (v[2] < 0) v = v.map((x) => -x);
+  let rMin = 1, rMax = 0;
+  for (let k = 0; k < P.length; k += 3) { const d = [P[k] - c[0], P[k + 1] - c[1], P[k + 2] - c[2]]; const h = d[0] * v[0] + d[1] * v[1] + d[2] * v[2]; const r = Math.hypot(d[0] - v[0] * h, d[1] - v[1] * h, d[2] - v[2] * h); rMin = Math.min(rMin, r); rMax = Math.max(rMax, r); }
+  eyes.push({ side, c: c.map((x) => +x.toFixed(5)), axis: v.map((x) => +x.toFixed(4)), pupil: +rMin.toFixed(5), outer: +rMax.toFixed(5) });
+  console.log(`eye ${side}: iris centre ${c.map((x) => x.toFixed(4))}, axis ${v.map((x) => x.toFixed(3))}, pupil ${(rMin * 1000).toFixed(1)} mm, iris ${(rMax * 1000).toFixed(1)} mm`);
+}
+manifest.landmarks = { aorticValve, pulmValve, rightAtrium, leftAtrium, nipples, eyes };
 fs.writeFileSync(`${OUT}/manifest.json`, JSON.stringify(manifest));
 let baseBytes = 0; for (const s of manifest.systems) baseBytes += s.bytes;
 console.log('parts', allParts.length, 'base total', (baseBytes / 1e6).toFixed(1), 'MB', 'manifest', fs.statSync(`${OUT}/manifest.json`).size);

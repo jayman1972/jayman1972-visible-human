@@ -157,6 +157,7 @@ uniform vec4 uAnimB;
 uniform vec4 uClipPlane;
 uniform float uClipMode;
 uniform float uHover;  // part id under the mouse (-1 none)
+uniform vec4 uEye[4];  // per eye: [iris centre (male space), pupil radius], [facing axis, iris radius]
 uniform vec4 uCut;   // cutaway window: centre of the selected organ (xyz), radius (w; 0 = off)
 // 1 = keep, 0 = inside the window cut between the camera and the selected organ
 float cutaway(vec3 wp) {

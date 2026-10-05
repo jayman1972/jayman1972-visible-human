@@ -1,11 +1,11 @@
 // Service worker: makes the app installable and usable offline.
 // App shell and the base model are cached at install; full-detail packs are cached
 // the first time they are viewed. A new build gets a new version and replaces the caches.
-const VERSION = 'b8be742d2018';
+const VERSION = 'ea328bfac769';
 const SHELL = `vh-shell-${VERSION}`;
 const DETAIL = 'vh-detail-v1';
 const FONTS = 'vh-fonts-v1';
-const PRECACHE = ["./","index.html","app.3fc836efb3.js","manifest.webmanifest","icons/apple-touch-icon.png","icons/favicon-32.png","icons/favicon-64.png","icons/icon-192.png","icons/icon-512.png","icons/maskable-512.png","data/manifest.json","data/refs.json","data/base/joints.mvb","data/base/lymph.mvb","data/base/muscles.mvb","data/base/nerves.mvb","data/base/organs.mvb","data/base/skeleton.mvb","data/base/skin.mvb","data/base/vessels.mvb"];
+const PRECACHE = ["./","index.html","app.41a738a917.js","manifest.webmanifest","icons/apple-touch-icon.png","icons/favicon-32.png","icons/favicon-64.png","icons/icon-192.png","icons/icon-512.png","icons/maskable-512.png","data/manifest.json","data/refs.json","data/base/joints.mvb","data/base/lymph.mvb","data/base/muscles.mvb","data/base/nerves.mvb","data/base/organs.mvb","data/base/skeleton.mvb","data/base/skin.mvb","data/base/vessels.mvb"];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(PRECACHE)).then(() => self.skipWaiting()));

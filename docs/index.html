@@ -98,11 +98,15 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible { outline: 2
 
 /* ---------- explode rail ---------- */
 .rail-wrap {
-  position: fixed; right: 8px; top: 50%; transform: translateY(-58%);
-  height: min(44vh, 360px);
+  /* below the view buttons (never over them), sized to the space above the bottom bar */
+  position: fixed; right: 8px; top: calc(var(--side-tools-bottom, 240px) + 12px);
+  height: clamp(140px, calc(100vh - var(--side-tools-bottom, 240px) - var(--dock-space, 140px) - 28px), 360px);
+  height: clamp(140px, calc(100dvh - var(--side-tools-bottom, 240px) - var(--dock-space, 140px) - 28px), 360px);
   display: flex; flex-direction: column; align-items: center; gap: 6px;
+  pointer-events: none;
 }
-.rail-end { width: 30px; height: 30px; display: grid; place-items: center; color: var(--muted); }
+#rail { pointer-events: auto; }
+.rail-end { width: 30px; height: 30px; display: grid; place-items: center; color: var(--muted); pointer-events: none; }
 .rail-end svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 #rail {
   position: relative; flex: 1; width: 48px; cursor: ns-resize; touch-action: none; margin: 14px 0;
@@ -203,8 +207,15 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible { outline: 2
 }
 .bottom-panel.open { transform: translateY(0); }
 .bottom-panel.expanded { max-height: 82vh; }
-.panel-handle { padding: 8px 0 2px; display: grid; place-items: center; cursor: grab; touch-action: none; }
-.panel-handle span { width: 40px; height: 5px; border-radius: 3px; background: var(--line-strong); }
+.panel-handle { padding: 10px 0 9px; display: grid; place-items: center; cursor: grab; touch-action: none; }
+.panel-handle span { width: 44px; height: 5px; border-radius: 3px; background: var(--line-strong); }
+.bottom-panel.dragging { transition: none; }
+/* phones: a panel swiped down collapses to just its handle (selection and isolation stay) */
+@media (max-width: 819px) {
+  .bottom-panel.peek { transform: translateY(calc(100% - 28px - var(--safe-b))); }
+  .bottom-panel.peek > :not(.panel-handle) { visibility: hidden; }
+  .bottom-panel.peek .panel-handle span { width: 56px; background: var(--xray); opacity: 0.8; }
+}
 .sheet-head { padding: 4px 16px 10px; display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: start; }
 .eyebrow { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-family: var(--f-ui); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
 #sheet-sys { display: inline-flex; align-items: center; gap: 6px; }
@@ -445,7 +456,7 @@ input[type="range"] { width: 100%; accent-color: var(--xray); height: 28px; }
   /* right column: view tools on top, the explode rail below them */
   .side-tools { right: 16px; }
   .rail-wrap {
-    right: 12px; top: auto; transform: none; bottom: calc(var(--dock-space, 120px) + 8px);
+    right: 12px; top: auto; bottom: calc(var(--dock-space, 120px) + 8px);
     height: clamp(150px, calc(100vh - var(--dock-space, 120px) - var(--side-tools-bottom, 330px) - 24px), 380px);
   }
   #tour-card { left: 50%; right: auto; width: 480px; transform: translateX(-50%); }
@@ -683,4 +694,4 @@ input[type="range"] { width: 100%; accent-color: var(--xray); height: 28px; }
 <div id="loader"><div id="load-bar"></div></div>
 <div id="loader-text">Assembling the body…</div>
 
-<script type="module" src="app.3fc836efb3.js"></script>
+<script type="module" src="app.41a738a917.js"></script>

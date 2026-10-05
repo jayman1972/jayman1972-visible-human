@@ -148,7 +148,7 @@ function syncVisibility() {
     const sets = [s.base, ...s.hi.values()].filter(Boolean);
     for (const ms of sets) {
       ms.main.visible = on;
-      ms.ghost.visible = on && state.isolated;
+      ms.ghost.visible = false; // isolating shows the selection on its own (no faded context)
       // x-ray outline of a hidden selection; not needed when a cutaway, isolation or a section already reveals it
       ms.xray.visible = on && selSys.has(L.id) && L.id !== 'skin' && !(U.uCut.value.w > 0) && !state.isolated && !state.clip.on;
       ms.pick.visible = on && (L.id !== 'skin' || solid);
@@ -301,7 +301,7 @@ function measureInsets() {
   const open = (id) => { const el = document.getElementById(id); return el && el.classList.contains('open') ? el : null; };
   if (!wide) {
     const panel = [...document.querySelectorAll('.bottom-panel.open')][0];
-    if (panel) view.bottom = Math.max(view.bottom, panel.offsetHeight + 4);
+    if (panel) view.bottom = panel.classList.contains('peek') ? H - panel.getBoundingClientRect().top + 8 : Math.max(view.bottom, panel.offsetHeight + 4);
   } else {
     // keep the subject between the info sheet (left) and the motion / tours / slice panel (right)
     const sh = open('sheet');
@@ -432,7 +432,7 @@ function selectGroup(key, { focus = true, fromSearch = false } = {}) {
   sound.select();
 }
 const _fb = new THREE.Box3(), _fc = new THREE.Vector3(), _fh = new THREE.Vector3();
-// Cutaway window onto a selected internal structure (off while isolated: ghosts already show it)
+// Cutaway window onto a selected internal structure (off while isolated: nothing else is drawn then)
 const _cb = new THREE.Box3(), _cc = new THREE.Vector3(), _cs = new THREE.Vector3();
 function updateCutaway() {
   const u = U.uCut.value, prevW = u.w;
@@ -466,8 +466,8 @@ function focusIds(ids, dirOverride = null) {
   const c = _fb.getCenter(new THREE.Vector3());
   const sz = _fb.getSize(new THREE.Vector3());
   const size = Math.max(sz.x, sz.y, sz.z);
-  const panel = document.querySelector('.bottom-panel:not([hidden])');
-  const bottom = view.w < 820 && panel ? Math.max(view.baseBottom ?? view.bottom, panel.offsetHeight + 4) : (view.baseBottom ?? view.bottom);
+  const panel = document.querySelector('.bottom-panel.open');
+  const bottom = view.w < 820 && panel ? (panel.classList.contains('peek') ? view.bottom : Math.max(view.baseBottom ?? view.bottom, panel.offsetHeight + 4)) : (view.baseBottom ?? view.bottom);
   const availPx = Math.max(120, Math.min(view.w - view.left - view.right, view.h - view.top - bottom));
   const worldPerPxAt1 = 2 * Math.tan(THREE.MathUtils.degToRad(BASE_FOV) / 2) / view.h;
   const margin = view.w >= 820 ? 2.3 : 1.9; // a little more breathing room on big screens
@@ -585,7 +585,7 @@ function setDoubleSided(on) {
   for (const m of matCache.values()) { if (m.userData.mode === 'opaque' || m.userData.mode === 'skin') { m.side = on ? THREE.DoubleSide : THREE.FrontSide; m.needsUpdate = true; } }
 }
 // Slicing a single organ only cuts that organ, so everything around it would hide the cut
-// face: ghost the surroundings while a part section is open (and restore afterwards).
+// face: isolate it while a part section is open (and restore afterwards).
 function setSectionIsolation() {
   const want = state.clip.on && state.clip.scope === 'part' && selSet.size > 0;
   if (want && !state.isolated) { state.isolated = true; state.clip.autoIsolated = true; recomputeStates(); }
@@ -850,7 +850,7 @@ function showPanel(id) {
   document.body.classList.add('has-panel');
 }
 function closePanelEl(el) {
-  el.classList.remove('open', 'expanded');
+  el.classList.remove('open', 'expanded', 'peek');
   setTimeout(() => { if (!el.classList.contains('open')) el.hidden = true; measureInsets(); state.needsRender = true; }, 320);
   setTimeout(() => { if (!document.querySelector('.bottom-panel.open')) document.body.classList.remove('has-panel'); }, 10);
 }
@@ -920,6 +920,7 @@ function openGroupSheet(g, ids) {
 }
 function showSheet(pid) {
   if (tour.active) return; // the tour card carries the text during a tour
+  if (sheet.dataset.pid !== pid) sheet.classList.remove('peek');
   $('#btn-isolate').textContent = state.isolated ? 'Show all' : 'Isolate';
   $('#btn-isolate').setAttribute('aria-pressed', state.isolated ? 'true' : 'false');
   if (sheet.dataset.pid !== pid) $('#sheet-scroll').scrollTop = 0;
@@ -940,17 +941,44 @@ $('#btn-isolate').addEventListener('click', () => {
 });
 $('#btn-slice').addEventListener('click', () => { if (selSet.size) openSection('part'); });
 $('#btn-hide').addEventListener('click', () => { if (!selSet.size) return; for (const i of selSet) userHidden[i] = 1; clearSelection(); });
-for (const el of document.querySelectorAll('.panel-handle')) {
-  let y0 = null;
-  el.addEventListener('pointerdown', (e) => { y0 = e.clientY; el.setPointerCapture(e.pointerId); });
-  el.addEventListener('pointerup', (e) => {
-    if (y0 === null) return;
-    const panel = el.closest('.bottom-panel'); const dy = e.clientY - y0; y0 = null;
-    if (dy > 40) { if (panel.classList.contains('expanded')) panel.classList.remove('expanded'); else if (panel.id === 'sheet') clearSelection(); else hidePanel(panel.id); }
-    else if (dy < -40) panel.classList.add('expanded');
-    else panel.classList.toggle('expanded');
-    setTimeout(() => { measureInsets(); state.needsRender = true; }, 340);
-  });
+// Phone panels have three heights: expanded, normal, and "peek" (only the handle shows, so the
+// model gets the screen; the selection and isolation are kept). Swipe the handle (or the panel's
+// heading) down or up to step between them; tap the handle to toggle. The X closes the panel.
+function setPanelHeight(panel, mode) {
+  panel.classList.toggle('peek', mode === 'peek');
+  panel.classList.toggle('expanded', mode === 'expanded');
+  setTimeout(() => {
+    measureInsets(); state.needsRender = true;
+    if (panel.id === 'sheet' && selSet.size) focusIds([...selSet]); // refit the organ to the new space
+  }, 340);
+}
+function panelMode(panel) { return panel.classList.contains('peek') ? 'peek' : panel.classList.contains('expanded') ? 'expanded' : 'normal'; }
+for (const panel of document.querySelectorAll('.bottom-panel')) {
+  const handle = panel.querySelector('.panel-handle');
+  const grips = [handle, panel.querySelector('.sheet-head, .panel-head')].filter(Boolean);
+  let drag = null;
+  for (const el of grips) {
+    el.addEventListener('pointerdown', (e) => {
+      if (window.innerWidth >= 820 || (el !== handle && e.target.closest('button, a, input'))) return;
+      drag = { y0: e.clientY, dy: 0, el }; el.setPointerCapture(e.pointerId);
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!drag || drag.el !== el) return;
+      drag.dy = e.clientY - drag.y0;
+      if (panelMode(panel) !== 'peek' && drag.dy > 0) { panel.classList.add('dragging'); panel.style.transform = `translateY(${drag.dy}px)`; }
+    });
+    const end = (e) => {
+      if (!drag || drag.el !== el) return;
+      const dy = drag.dy, tapped = Math.abs(dy) < 8; drag = null;
+      panel.classList.remove('dragging'); panel.style.transform = '';
+      const mode = panelMode(panel);
+      if (tapped) { if (el === handle) setPanelHeight(panel, mode === 'peek' ? 'normal' : mode === 'normal' ? 'expanded' : 'normal'); return; }
+      if (dy > 40) setPanelHeight(panel, mode === 'expanded' ? 'normal' : 'peek');
+      else if (dy < -40) setPanelHeight(panel, mode === 'peek' ? 'normal' : 'expanded');
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+  }
 }
 
 // ---- section panel ----
@@ -1172,7 +1200,7 @@ canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); showToa
     const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y), dt = performance.now() - down.t;
     if (!multi && moved < 8 && dt < 450) {
       const id = pickAt(e.clientX, e.clientY);
-      if (id >= 0) select(id); else if (selSet.size) clearSelection();
+      if (id >= 0) select(id); else if (selSet.size && !state.isolated) clearSelection();
       state.needsRender = true;
     }
     down = null;
@@ -1481,6 +1509,7 @@ async function init() {
   U.uAnimTex.value = staticTexture((p, d, o) => { d[o] = p.anim; d[o + 1] = p.pivot[0]; d[o + 2] = p.pivot[1]; d[o + 3] = p.pivot[2]; });
   U.uAxisTex.value = staticTexture((p, d, o) => { d[o] = p.axis[0]; d[o + 1] = p.axis[1]; d[o + 2] = p.axis[2]; d[o + 3] = p.flags; });
   U.uFemTex.value = staticTexture((p, d, o) => { d[o] = p.fo[0]; d[o + 1] = p.fo[1]; d[o + 2] = p.fo[2]; d[o + 3] = p.sex + 4 * p.pg; });
+  (manifest.landmarks.eyes || []).slice(0, 2).forEach((e, i) => { U.uEye.value[i * 2].set(...e.c, e.pupil); U.uEye.value[i * 2 + 1].set(...e.axis, e.outer); });
   (manifest.landmarks.nipples || []).slice(0, 2).forEach((q, i) => { U.uNip.value[i * 2].set(...q.tip, q.h); U.uNip.value[i * 2 + 1].set(...q.n, q.r); });
   let pgSaved = false; try { pgSaved = localStorage.getItem('vh-pg') === '1'; } catch (e) { /* storage unavailable */ }
   if (pgSaved) setPG(true, { quiet: true }); else syncPGButton();

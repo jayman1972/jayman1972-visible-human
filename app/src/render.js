@@ -85,7 +85,7 @@ export function makeSharedUniforms() {
     uNoise: { value: null },
     uHiColor: { value: new THREE.Color('#6fe3f2') },
     uSkinA: { value: new THREE.Vector2(0.035, 0.5) }, uSkinFade: { value: 1 }, uGhostA: { value: 0.075 },
-    uClipPlane: { value: new THREE.Vector4(0, 0, 1, 1e3) }, uClipMode: { value: 0 }, uCut: { value: new THREE.Vector4() }, uHover: { value: -1 },
+    uClipPlane: { value: new THREE.Vector4(0, 0, 1, 1e3) }, uClipMode: { value: 0 }, uCut: { value: new THREE.Vector4() }, uHover: { value: -1 }, uEye: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) },
     uKeyDir: { value: new THREE.Vector3(0, 0, 1) }, uDetail: { value: 1 },
     ...tissueUniforms(THREE),
   };
@@ -114,6 +114,7 @@ export function makeAnatomyMaterial(shared, mode, { isSkin = false, lodPass = 0 
     let f = FRAG_PARS + shader.fragmentShader;
     f = f.replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
       bool capFace = false;
+      float irisMask = 0.0; vec3 irisDome = vec3(0.0); // smooth corneal dome over the iris (clearcoat normal)
       int tcls = int(vTissue + 0.5);
       vec4 tA = uTisA[tcls]; vec4 tB = uTisB[tcls]; vec3 tC = uTisC[tcls];
       float pxW = length(fwidth(vMalePos)) + 1e-6;               // world size of one pixel
@@ -123,7 +124,17 @@ export function makeAnatomyMaterial(shared, mode, { isSkin = false, lodPass = 0 
         if (!gl_FrontFacing && mod(floor(vFlags / 2.0), 2.0) < 0.5) capFace = true;
       }
       float cutK = vState < 1.5 ? cutaway(vWPos) : 1.0;
-      if (cutK < 0.03) discard;`);
+      if (cutK < 0.03) discard;
+      float limbus = -1.0; // cornea: its clear centre is not drawn, only the rim where it meets the white
+      if (tcls == 22) {
+        for (int i = 0; i < 2; i++) {
+          vec4 ea = uEye[i * 2], eb = uEye[i * 2 + 1];
+          if (eb.w <= 0.0) continue;
+          vec3 d = vMalePos - ea.xyz; float h = dot(d, eb.xyz); float r = length(d - eb.xyz * h);
+          if (h > 0.0003 && h < 0.008 && r < eb.w * 0.97) discard;
+          if (h > -0.002 && h < 0.008 && r < eb.w * 1.25) limbus = smoothstep(eb.w * 0.985, eb.w * 1.045, r);
+        }
+      }`);
     f = f.replace('#include <color_fragment>', `#include <color_fragment>
       diffuseColor.rgb *= mix(0.45, 1.0, cutK);
       {
@@ -149,7 +160,36 @@ export function makeAnatomyMaterial(shared, mode, { isSkin = false, lodPass = 0 
           vec3 ax = normalize(vAxis + vec3(1e-4));
           vec3 q = mp - ax * dot(mp, ax) * 0.95;
           diffuseColor.rgb *= mix(1.0, mix(0.9, 1.06, nz(q * 300.0).a), DETAIL(300.0));
+        } else if (tcls == 17) {
+          // Iris: painted in polar coordinates around each eye's iris centre (uEye: [centre, pupil r], [axis, iris r])
+          for (int i = 0; i < 2; i++) {
+            vec4 ea = uEye[i * 2], eb = uEye[i * 2 + 1];
+            if (eb.w <= 0.0) continue;
+            vec3 d = mp - ea.xyz; float h = dot(d, eb.xyz);
+            vec3 rv = d - eb.xyz * h; float r = length(rv);
+            if (abs(h) > 0.0025 || r > eb.w * 1.04) continue;
+            vec3 b1 = normalize(cross(eb.xyz, vec3(0.0, 1.0, 0.0))), b2 = cross(eb.xyz, b1);
+            float ang = atan(dot(rv, b2), dot(rv, b1));
+            float t = clamp((r - ea.w) / (eb.w - ea.w), 0.0, 1.0);
+            vec2 cs = vec2(cos(ang), sin(ang));
+            float dd = DETAIL(900.0);
+            float fib = nz(vec3(cs * 26.0, t * 2.5 + float(i) * 7.0)).a;   // radial stroma fibres
+            float fib2 = nz(vec3(cs * 64.0, t * 4.0 + 3.0)).a;
+            float crypt = nz(vec3(cs * 7.0, t * 9.0 + 11.0)).a;              // crypts
+            vec3 outerC = vec3(0.21, 0.33, 0.43), midC = vec3(0.38, 0.52, 0.60), collC = vec3(0.56, 0.43, 0.22);
+            vec3 col = mix(midC, outerC, smoothstep(0.35, 1.0, t));
+            col = mix(col, collC, (1.0 - smoothstep(0.12, 0.42, t)) * 0.75); // amber collarette around the pupil
+            col *= mix(1.0, mix(0.72, 1.2, fib) * mix(0.9, 1.08, fib2), dd);
+            col *= mix(1.0, mix(0.78, 1.0, smoothstep(0.35, 0.6, crypt)), dd);
+            col = mix(col, vec3(0.05, 0.07, 0.09), smoothstep(0.84, 1.0, t)); // dark limbal ring
+            col = mix(vec3(0.07, 0.05, 0.04), col, smoothstep(0.0, 0.07, t)); // pupillary ruff
+            diffuseColor.rgb = pow(col, vec3(2.2));
+            // the cornea is a ~7.8 mm sphere whose apex sits ~4.6 mm in front of the iris
+            irisMask = 1.0 - smoothstep(0.92, 1.04, r / eb.w);
+            irisDome = normalize(mp - (ea.xyz - eb.xyz * 0.0032));
+          }
         }
+        if (limbus >= 0.0) diffuseColor.rgb = pow(mix(vec3(0.16, 0.2, 0.24), vec3(0.9, 0.89, 0.87), limbus), vec3(2.2));
         if (uIsSkin > 0.5 && uFemale >= 0.5 && uPG < 0.5 && mp.z > 0.05) {
           float d = min(length(mp.xy - vec2(0.105, 1.262)), length(mp.xy - vec2(-0.105, 1.262)));
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.36, 0.17, 0.14), smoothstep(0.021, 0.016, d) * 0.85);
@@ -161,6 +201,10 @@ export function makeAnatomyMaterial(shared, mode, { isSkin = false, lodPass = 0 
           if (tcls == 12) { float c = nz(mp * 300.0).a; diffuseColor.rgb *= mix(0.65, 1.1, smoothstep(0.3, 0.6, c)); }
         }
       }`);
+    f = f.replace('#include <clearcoat_normal_fragment_maps>', `#include <clearcoat_normal_fragment_maps>
+      #ifdef USE_CLEARCOAT
+      if (irisMask > 0.0) clearcoatNormal = normalize(mix(clearcoatNormal, normalize((viewMatrix * vec4(irisDome, 0.0)).xyz), irisMask));
+      #endif`);
     f = f.replace('#include <roughnessmap_fragment>', 'float roughnessFactor = clamp(vRough + (nz(vMalePos * 40.0).a - 0.5) * 0.14 * uDetail, 0.04, 1.0);');
     f = f.replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
       if (capFace) {
