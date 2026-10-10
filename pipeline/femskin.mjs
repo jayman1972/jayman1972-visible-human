@@ -33,6 +33,30 @@ export const FEMALE_BODY = {
     ["torso/torso-vshape-decr.target", 0.5],
   ],
 };
+// The native female (MakeHuman's own female mesh as the skin): slim with MakeHuman's "ideal"
+// proportions, breasts kept at the fuller build's size, its own nipples flattened (the modelled ones
+// sit on top), and face modifiers toward a conventionally attractive face (an oval face, high
+// cheekbones, a refined nose, fuller lips, a narrower chin, a slimmer neck).
+export const FEMALE_NATIVE = {
+  age: 25, breastSize: 0.78, breastFirmness: 0.62, weight: 0.45, muscle: 0.35, proportions: 1, heightRatio: 0.94,
+  breastFrom: { weight: 0.55 },
+  extra: [
+    ['breast/nipple-point-decr.target', 1],
+    ['head/head-oval.target', 0.6], ['forehead/forehead-scale-vert-decr.target', 0.2], ['eyebrows/eyebrows-angle-up.target', 0.3],
+    ['eyes/*-eye-scale-incr.target', 0.25], ['eyes/*-eye-corner2-up.target', 0.35],
+    ['nose/nose-scale-horiz-decr.target', 0.3], ['nose/nose-scale-vert-decr.target', 0.15], ['nose/nose-point-up.target', 0.4], ['nose/nose-nostrils-width-decr.target', 0.3], ['nose/nose-width1-decr.target', 0.3], ['nose/nose-hump-decr.target', 0.3],
+    ['mouth/mouth-lowerlip-volume-incr.target', 0.5], ['mouth/mouth-upperlip-volume-incr.target', 0.35], ['mouth/mouth-cupidsbow-incr.target', 0.5], ['mouth/mouth-angles-up.target', 0.2], ['mouth/mouth-scale-horiz-decr.target', 0.1],
+    ['cheek/*-cheek-bones-incr.target', 0.5], ['cheek/*-cheek-volume-decr.target', 0.15],
+    ['chin/chin-width-decr.target', 0.3], ['chin/chin-prominent-incr.target', 0.2], ['chin/chin-bones-decr.target', 0.3],
+    ['neck/neck-scale-horiz-decr.target', 0.3], ['neck/neck-scale-vert-incr.target', 0.2],
+    ['measure/measure-waist-circ-decr.target', 0.3], ['measure/measure-upperarm-circ-decr.target', 0.3], ['measure/measure-thigh-circ-decr.target', 0.2],
+  ],
+};
+// where the native skin is made denser (male space): around the pudendal cleft, for the shader's labia
+export const NATIVE_REFINE = [
+  { zone: (q) => Math.abs(q[0]) < 0.045 && q[1] > 0.67 && q[1] < 0.91 && q[2] > -0.07 && q[2] < 0.11, maxLen: 0.004 },
+  { zone: (q) => Math.abs(q[0]) < 0.022 && q[1] > 0.69 && q[1] < 0.89 && q[2] > -0.06 && q[2] < 0.1, maxLen: 0.0022 },
+];
 export const FEMALE_SHAPE = { reliefOpts: { iters: 220, lambda: 0.55, mu: -0.565 } };
 
 const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
@@ -304,4 +328,30 @@ function limbContour(P, D, regionOfV, J, opts = {}) {
     });
   }
   return out;
+}
+
+// The native female (MakeHuman's female mesh as the skin): every vertex of this body's male skin
+// maps to the matching point of that mesh (the closest point on MakeHuman's male fitted onto this
+// skin, then the same spot on the female). The male skin morphs there as the body changes, and
+// everything inside the body follows these offsets into the female shape.
+export function computeSkinNative(parts, fem, skinRegionOf) {
+  let n = 0; for (const p of parts) n += p.mesh.P.length / 3;
+  const P = new Float64Array(n * 3), D = new Float64Array(n * 3), B = new Float32Array(n), tris = [];
+  let o = 0, miss = 0;
+  for (const p of parts) {
+    const M = p.mesh, m = M.P.length / 3;
+    for (let k = 0; k < m; k++) {
+      const q = [M.P[k * 3], M.P[k * 3 + 1], M.P[k * 3 + 2]];
+      const r = fem.T.dispAt(q, skinRegionOf(p.name, q[0])) || fem.T.dispAt(q);
+      if (!r) miss++;
+      for (let a = 0; a < 3; a++) { P[(o + k) * 3 + a] = q[a]; D[(o + k) * 3 + a] = r ? r.nat[a] - q[a] : 0; }
+      B[o + k] = r ? r.breast : 0;
+    }
+    for (let t = 0; t < M.I.length; t++) tris.push(M.I[t] + o);
+    p._fo = o; o += m;
+  }
+  // continuous across the pieces, lightly smoothed (closest points jump at sharp creases)
+  smoothField(P, D, tris, { iters: 3, headIters: 3 });
+  for (const p of parts) { const m = p.mesh.P.length / 3; p.femD = Float32Array.from(D.subarray(p._fo * 3, (p._fo + m) * 3)); p.femB = B.slice(p._fo, p._fo + m); }
+  if (miss) console.log(`  ${miss} skin vertices without a MakeHuman match`);
 }

@@ -130,6 +130,10 @@ export function makeAnatomyMaterial(shared, mode, { isSkin = false, lodPass = 0 
       }
       float cutK = vState < 1.5 ? cutaway(vWPos) : 1.0;
       if (cutK < 0.03) discard;
+      if (abs(vSexVis) < 0.999) { // skins dissolving: a screen-space dither, each skin taking the other's gaps
+        float h = fract(52.9829189 * fract(dot(floor(gl_FragCoord.xy), vec2(0.06711056, 0.00583715))));
+        if ((vSexVis < 0.0 ? 1.0 - h : h) > abs(vSexVis)) discard;
+      }
       float limbus = -1.0; // cornea: its clear centre is not drawn, only the rim where it meets the white
       if (tcls == 22) {
         for (int i = 0; i < 2; i++) {
@@ -329,7 +333,7 @@ export function makePickMaterial(shared, lodPass, isSkin = false) {
         vec3 n = normal; vec3 p; float cull;
         anatomyVertex(p, n, cull);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
-        if (cull > 0.5 || vState > 2.5) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        if (cull > 0.5 || vState > 2.5 || abs(vSexVis) < 0.5) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
         vId = int(vPid + 0.5) + 1;
       }`,
     fragmentShader: /* glsl */ `

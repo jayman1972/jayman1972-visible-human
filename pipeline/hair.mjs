@@ -58,7 +58,7 @@ function resample(pl, n) {
 }
 
 // skin: [{ name, side, P (male), D (female offsets), N (male normals), FN (female normals), I }]
-export function buildHair({ skin, face, eyes }) {
+export function buildHair({ skin, face, eyes, lashCards = null }) {
   const H = headFrame(face);
   const out = [];
   for (const sex of ['female', 'male']) {
@@ -210,7 +210,30 @@ export function buildHair({ skin, face, eyes }) {
 
     // ---- eyelashes along the eye openings (the skin's open edge around each eye)
     const lashes = [];
-    for (const e of eyes) {
+    // (or on given lash cards: MakeHuman's lids fold back into the socket, with no open edge)
+    if (F && lashCards) for (const sd of Object.keys(lashCards)) {
+      const cards = lashCards[sd]; if (!cards.length) continue;
+      for (const upper of [true, false]) {
+        const cs = cards.filter((c) => c.upper === upper); if (!cs.length) continue;
+        // along the lid: medial (nearest the midline) to lateral
+        const mid = (c) => [0, 1, 2].map((a) => (c.root[0][a] + c.root[1][a]) / 2);
+        const xs = cs.map((c) => Math.abs(mid(c)[0])), x0 = Math.min(...xs), x1 = Math.max(...xs);
+        const count = upper ? 46 : 18;
+        for (let k = 0; k < count; k++) {
+          const c = cs[Math.floor(rnd() * cs.length)], u = rnd();
+          const root = [0, 1, 2].map((a) => c.root[0][a] * (1 - u) + c.root[1][a] * u);
+          const tt = (Math.abs(root[0]) - x0) / Math.max(1e-6, x1 - x0);
+          if (upper && tt < 0.06) continue; // not in the inner corner
+          const up = upper ? 1 : -1;
+          const L = (upper ? 0.0062 + 0.0028 * tt : 0.0026 + 0.0012 * tt) * (0.85 + 0.3 * rnd());
+          const d0 = norm(add(norm(c.dir), [0, up * 0.25, 0.1]));
+          const pl = [root];
+          for (let i = 1; i <= 3; i++) { const s = i / 3; pl.push(add(add(root, d0, L * s), [0, up, 0], L * 0.4 * s * s)); }
+          lashes.push({ pts: pl, width: upper ? 0.00014 : 0.0001, shade: rnd(), layer: 1, kind: 2 });
+        }
+      }
+    }
+    for (const e of (F && lashCards ? [] : eyes)) {
       const ec = e.c;
       // open edge: border vertices of the orbital skin not shared with other skin pieces
       const key = (x, y, z) => Math.round(x * 2e4) + ',' + Math.round(y * 2e4) + ',' + Math.round(z * 2e4);

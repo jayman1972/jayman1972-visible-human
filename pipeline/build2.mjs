@@ -9,11 +9,11 @@ import zlib from 'node:zlib';
 import { MeshoptSimplifier, MeshoptEncoder } from 'meshoptimizer';
 import { extract } from './extract.mjs';
 import { femaleParts } from './female.mjs';
-import { VULVA } from '../app/src/warp.js';
+import { VULVA, vulvaAmount } from '../app/src/warp.js';
 import { makeFemaleTransfer, smoothField, REG } from './mhfemale.mjs';
-import { liftPatch, smoothHoleEdge, overlayPatch } from './pudlift.mjs';
 import { faceFrame } from './face.mjs';
-import { computeSkinField, skinRegion, FEMALE_BODY, FEMALE_SHAPE, headScaleOffset } from './femskin.mjs';
+import { computeSkinNative, skinRegion, FEMALE_NATIVE, NATIVE_REFINE } from './femskin.mjs';
+import { buildNativeSkin } from './mhskin.mjs';
 import { buildHair, packHair, HAIRLINE } from './hair.mjs';
 
 await MeshoptSimplifier.ready;
@@ -455,11 +455,13 @@ for (const sys of SYSTEMS) {
 }
 
 // ---------------------------------------------------------------------------
-// Female body shape. MakeHuman's average adult male -> female difference (CC0 data), fitted to
-// this body (see mhfemale.mjs). Skin gets an exact per-vertex offset; everything inside follows a
-// smooth 3D offset field (breast tissue masked out so the ribs don't bulge with the breasts).
+// Female body. The female skin is MakeHuman's own female mesh (CC0; mhskin.mjs), posed into this
+// body. MakeHuman's male is fitted onto this body's male skin (mhfemale.mjs), which maps every male
+// skin point to the matching point of the female; everything inside the body follows those offsets
+// (exactly near the skin, a smooth 3D field deeper; breast tissue masked out so the ribs don't bulge
+// with the breasts).
 // ---------------------------------------------------------------------------
-const maleSkin = () => allParts.filter((p) => p.sys === 'skin' && p.sex !== 1 && !p.femSpace && !/hair/i.test(p.name) && !/^Urogenital region$/.test(p.name));
+const maleSkin = () => allParts.filter((p) => p.sys === 'skin' && p.sex !== 1 && !p.femSpace && !p.native && !/hair/i.test(p.name) && !/^Urogenital region$/.test(p.name));
 // 1) refine the skin where the female shape bends it sharply (breasts, groin) before measuring it
 {
   const zones = [
@@ -482,10 +484,31 @@ const maleSkin = () => allParts.filter((p) => p.sys === 'skin' && p.sex !== 1 &&
 // 2) fit MakeHuman to this body
 const fem = {};
 {
-  const bone = (name) => { const p = allParts.find((q) => q.sys === 'skeleton' && q.name === name && q.side === 'L'); const P = p.mesh.P, out = []; for (let k = 0; k < P.length; k += 3) out.push([P[k], P[k + 1], P[k + 2]]); return out; };
+  const bone = (name, sd = 'L') => { const p = allParts.find((q) => q.sys === 'skeleton' && q.name === name && q.side === sd); const P = p.mesh.P, out = []; for (let k = 0; k < P.length; k += 3) out.push([P[k], P[k + 1], P[k + 2]]); return out; };
   const endC = (P, top, frac) => { let mn = Infinity, mx = -Infinity; for (const q of P) { mn = Math.min(mn, q[1]); mx = Math.max(mx, q[1]); } const h = mx - mn; const sel = P.filter((q) => (top ? q[1] > mx - h * frac : q[1] < mn + h * frac)); return [0, 1, 2].map((a) => sel.reduce((t, q) => t + q[a], 0) / sel.length); };
   const hum = bone('Humerus'), rad = bone('Radius'), fem_ = bone('Femur'), tib = bone('Tibia');
   const joints = { shoulder: endC(hum, true, 0.07), elbow: endC(hum, false, 0.06), wrist: endC(rad, false, 0.04), hip: endC(fem_, true, 0.06), knee: endC(fem_, false, 0.05), ankle: endC(tib, false, 0.04) };
+  // thumb and little finger tips (left hand), for turning MakeHuman's hands to face the same way
+  const tip = (name) => { const P = bone(name); return [0, 1, 2].map((a) => P.reduce((t, q) => t + q[a], 0) / P.length); };
+  joints.thumb = tip('Distal phalanx of first finger of hand'); joints.little = tip('Distal phalanx of fifth finger of hand');
+  // each hand bone's ends along its long axis (proximal = the end nearer the bone before it)
+  const ends = (name, ref, sd = 'L') => {
+    const P = bone(name, sd), c = [0, 1, 2].map((a) => P.reduce((t, q) => t + q[a], 0) / P.length);
+    let ax = [0.3, 1, 0.2];
+    for (let it = 0; it < 30; it++) { const nx = [0, 0, 0]; for (const q of P) { const d = [q[0] - c[0], q[1] - c[1], q[2] - c[2]], s = d[0] * ax[0] + d[1] * ax[1] + d[2] * ax[2]; for (let a = 0; a < 3; a++) nx[a] += d[a] * s; } const l = Math.hypot(...nx); ax = nx.map((v) => v / l); }
+    const pr = P.map((q) => (q[0] - c[0]) * ax[0] + (q[1] - c[1]) * ax[1] + (q[2] - c[2]) * ax[2]), lo = Math.min(...pr), hi = Math.max(...pr), span = hi - lo;
+    const endAt = (top) => { const sel = P.filter((_, i) => (top ? pr[i] > hi - span * 0.1 : pr[i] < lo + span * 0.1)); return [0, 1, 2].map((a) => sel.reduce((t, q) => t + q[a], 0) / sel.length); };
+    const A = endAt(false), B = endAt(true), dA = Math.hypot(A[0] - ref[0], A[1] - ref[1], A[2] - ref[2]), dB = Math.hypot(B[0] - ref[0], B[1] - ref[1], B[2] - ref[2]);
+    return { e: dA < dB ? [A, B] : [B, A], c };
+  };
+  joints.hand = {}; fem.handM = { L: {}, R: {} };
+  const ORD = ['first', 'second', 'third', 'fourth', 'fifth'], MC = ['First', 'Second', 'Third', 'Fourth', 'Fifth'];
+  for (const sd of ['L', 'R']) for (let f = 0; f < 5; f++) {
+    const seq = f === 0 ? [['finger1-1', 'First metacarpal bone'], ['finger1-2', 'Proximal phalanx of first finger of hand'], ['finger1-3', 'Distal phalanx of first finger of hand']]
+      : [[`metacarpal${f}`, `${MC[f]} metacarpal bone`], [`finger${f + 1}-1`, `Proximal phalanx of ${ORD[f]} finger of hand`], [`finger${f + 1}-2`, `Middle phalanx of ${ORD[f]} finger of hand`], [`finger${f + 1}-3`, `Distal phalanx of ${ORD[f]} finger of hand`]];
+    let ref = sd === 'L' ? joints.wrist : [-joints.wrist[0], joints.wrist[1], joints.wrist[2]];
+    for (const [mh, ours] of seq) { const r = ends(ours, ref, sd); fem.handM[sd][mh] = r.e; if (sd === 'L') joints.hand[mh] = r.e; ref = r.c; }
+  }
   const P = [], N = [], R = [];
   let top = 0;
   for (const p of maleSkin()) {
@@ -497,16 +520,14 @@ const fem = {};
   // eye centres (iris centroids) for the face frame
   fem.eyes = ['R', 'L'].map((sd) => { const p = allParts.find((q) => q.sys === 'nerves' && q.name === 'Iris' && q.side === sd); const P = p.mesh.P, c = [0, 0, 0]; for (let k = 0; k < P.length; k += 3) for (let a = 0; a < 3; a++) c[a] += P[k + a] / (P.length / 3); return { c }; });
   fem.face = faceFrame(fem.eyes);
-  fem.T = makeFemaleTransfer({ joints, height: top, skin: { P, N, R } }, FEMALE_BODY);
-  fem.shape = FEMALE_SHAPE;
+  fem.T = makeFemaleTransfer({ joints, height: top, skin: { P, N, R } }, FEMALE_NATIVE);
 }
-computeSkinField(maleSkin(), fem, skinRegion);
+computeSkinNative(maleSkin(), fem, skinRegion);
 // 3) smooth offset field for everything inside the body (3D grid, 2 cm)
 {
   const F = { min: [-0.42, -0.05, -0.21], cell: 0.015, dims: [57, 122, 28] };
   const pts = [];
-  // (the head scale is left out of the samples and added back exactly below, so everything inside the head scales with it)
-  for (const p of maleSkin()) { const P = p.mesh.P; for (let k = 0; k < P.length / 3; k++) { const h = headScaleOffset([P[k * 3], P[k * 3 + 1], P[k * 3 + 2]]); pts.push([P[k * 3], P[k * 3 + 1], P[k * 3 + 2], p.femD[k * 3] - h[0], p.femD[k * 3 + 1] - h[1], p.femD[k * 3 + 2] - h[2], (1 - p.femB[k]) ** 2]); } }
+  for (const p of maleSkin()) { const P = p.mesh.P; for (let k = 0; k < P.length / 3; k++) pts.push([P[k * 3], P[k * 3 + 1], P[k * 3 + 2], p.femD[k * 3], p.femD[k * 3 + 1], p.femD[k * 3 + 2], (1 - p.femB[k]) ** 2]); }
   const hash = (list, cell) => { const m = new Map(); for (const q of list) { const k = Math.floor(q[0] / cell) + ',' + Math.floor(q[1] / cell) + ',' + Math.floor(q[2] / cell); (m.get(k) || m.set(k, []).get(k)).push(q); } return { m, cell }; };
   const near = (h, c, r, fn) => { const n = Math.ceil(r / h.cell), gx = Math.floor(c[0] / h.cell), gy = Math.floor(c[1] / h.cell), gz = Math.floor(c[2] / h.cell); for (let i = -n; i <= n; i++) for (let j = -n; j <= n; j++) for (let k = -n; k <= n; k++) { const a = h.m.get((gx + i) + ',' + (gy + j) + ',' + (gz + k)); if (a) for (const q of a) fn(q); } };
   const hNear = hash(pts, 0.02), hFar = hash(pts.filter((_, i) => i % 3 === 0), 0.04), hWide = hash(pts.filter((_, i) => i % 9 === 0), 0.09);
@@ -523,8 +544,7 @@ computeSkinField(maleSkin(), fem, skinRegion);
     const far = sw > 1e-9 ? [sx / sw, sy / sw, sz / sw] : [0, 0, 0];
     const t0 = nw > 0 ? Math.min(1, Math.max(0, (dmin - 0.008) / 0.03)) : 1, t = t0 * t0 * (3 - 2 * t0);
     const o = ((k * ny + j) * nx + i) * 3;
-    const hs = headScaleOffset(c);
-    for (let a = 0; a < 3; a++) data[o + a] = (nw > 0 ? [n0, n1, n2][a] / nw : 0) * (1 - t) + far[a] * t + hs[a];
+    for (let a = 0; a < 3; a++) data[o + a] = (nw > 0 ? [n0, n1, n2][a] / nw : 0) * (1 - t) + far[a] * t;
   }
   fem.F = F; fem.field = data;
   fem.at = (p) => { // trilinear, clamped (matches the GPU's linear filtering of the 3D texture)
@@ -642,74 +662,38 @@ computeSkinField(maleSkin(), fem, skinRegion);
 }
 
 // ---------------------------------------------------------------------------
-// Female shape for the new parts: the pudendal skin patch takes per-vertex offsets with the rest
-// of the skin; the female-only organs are moved into the female shape here (near the skin they
-// follow the skin's offsets, deeper inside the smooth field) and drawn as-is at runtime.
+// Female shape for the new parts: the pudendal skin patch (the male doll crotch now) maps onto the
+// female with the rest of the male skin; the female-only organs are moved into the female shape here
+// (near the skin they follow the skin's offsets, deeper inside the smooth field).
 // ---------------------------------------------------------------------------
-computeSkinField(maleSkin(), fem, skinRegion);
-// The pudendal fill spans the hole the male genitals leave, which dips well below the crotch.
-// In the female body it is pulled in (toward the cleft's axis) onto MakeHuman's female crotch,
-// tapering to zero at its rim, so the thighs close around the cleft as they do in a woman.
-{
-  const patch = allParts.find((p) => p.sys === 'skin' && p.name === 'Pudendal region');
-  if (patch) {
-    // its outer edge (tucked 1-3 mm under the neighbouring skin, not welded to it) takes the
-    // neighbours' offsets; the inside is a harmonic fill from that edge
-    const M = patch.mesh, n = M.P.length / 3, D = patch.femD;
-    const cnt = new Map();
-    for (let t = 0; t < M.I.length; t += 3) for (const [u, v] of [[M.I[t], M.I[t + 1]], [M.I[t + 1], M.I[t + 2]], [M.I[t + 2], M.I[t]]]) { const k = u < v ? u + ':' + v : v + ':' + u; cnt.set(k, (cnt.get(k) || 0) + 1); }
-    const rim = new Set(); for (const [k, c] of cnt) if (c === 1) { const [u, v] = k.split(':'); rim.add(+u); rim.add(+v); }
-    const nbs = maleSkin().filter((p) => p !== patch && p.mx[1] > 0.66 && p.mn[1] < 0.95 && Math.abs(p.c[0]) < 0.25);
-    let snapped = 0;
-    for (const i of rim) {
-      const q = [M.P[i * 3], M.P[i * 3 + 1], M.P[i * 3 + 2]]; let W = 0; const acc = [0, 0, 0];
-      for (const o of nbs) { const P = o.mesh.P; for (let k = 0; k < P.length; k += 3) { const d = Math.hypot(P[k] - q[0], P[k + 1] - q[1], P[k + 2] - q[2]); if (d > 0.008) continue; const w = 1 / (d ** 2 + 1e-7); W += w; for (let a = 0; a < 3; a++) acc[a] += w * o.femD[k + a]; } }
-      if (W) { for (let a = 0; a < 3; a++) D[i * 3 + a] = acc[a] / W; snapped++; }
-    }
-    const adj = Array.from({ length: n }, () => new Set());
-    for (let t = 0; t < M.I.length; t += 3) { const a = M.I[t], b = M.I[t + 1], c = M.I[t + 2]; adj[a].add(b).add(c); adj[b].add(a).add(c); adj[c].add(a).add(b); }
-    for (let it = 0; it < 1500; it++) for (let i = 0; i < n; i++) { if (rim.has(i) || !adj[i].size) continue; for (let a = 0; a < 3; a++) { let s0 = 0; for (const j of adj[i]) s0 += D[j * 3 + a]; D[i * 3 + a] = s0 / adj[i].size; } }
-    console.log(`pudendal patch: edge snapped to its neighbours at ${snapped} of ${rim.size} vertices`);
-    patch.femD0 = Float64Array.from(D);
-    const L = liftPatch(patch, fem.T.female, fem.T.tris);
-    patch.liftD = new Float64Array(D.length); for (let k = 0; k < D.length; k++) patch.liftD[k] = D[k] - patch.femD0[k];
-    // The open edge of the skin around the hole zigzags (the male mesh was cut along triangle edges)
-    // and showed as a frill around the patch: smoothed along itself in the female shape (the
-    // structures underneath follow the skin's offsets, so nothing pokes through)
-    const around = maleSkin().filter((p) => p !== patch && p.mx[1] > 0.6 && p.mn[1] < 0.95 && Math.abs(p.c[0]) < 0.25);
-    {
-      const PF = new Float64Array(M.P.length); for (let k = 0; k < PF.length; k++) PF[k] = M.P[k] + D[k];
-      const G = new Map(), GC = 0.01;
-      for (let i = 0; i < PF.length / 3; i++) { const k = Math.floor(PF[i * 3] / GC) + ',' + Math.floor(PF[i * 3 + 1] / GC) + ',' + Math.floor(PF[i * 3 + 2] / GC); (G.get(k) || G.set(k, []).get(k)).push(i); }
-      const near = (q) => { const gx = Math.floor(q[0] / GC), gy = Math.floor(q[1] / GC), gz = Math.floor(q[2] / GC); for (let a = -2; a <= 2; a++) for (let b = -2; b <= 2; b++) for (let c = -2; c <= 2; c++) for (const i of G.get((gx + a) + ',' + (gy + b) + ',' + (gz + c)) || []) if (Math.hypot(PF[i * 3] - q[0], PF[i * 3 + 1] - q[1], PF[i * 3 + 2] - q[2]) < 0.012) return true; return false; };
-      const fp = around.map((p) => { const X = new Float64Array(p.mesh.P.length); for (let k = 0; k < X.length; k++) X[k] = p.mesh.P[k] + p.femD[k]; return { P: X, I: p.mesh.I, src: p }; });
-      // into the hole: toward the nearest patch point well inside its rim (3+ rings in)
-      const pc = new Map(); for (let t = 0; t < M.I.length; t += 3) for (const [u, v] of [[M.I[t], M.I[t + 1]], [M.I[t + 1], M.I[t + 2]], [M.I[t + 2], M.I[t]]]) { const k = u < v ? u + ':' + v : v + ':' + u; pc.set(k, (pc.get(k) || 0) + 1); }
-      const ring = new Int32Array(n).fill(-1), qq = []; for (const [k, c] of pc) if (c === 1) for (const v of k.split(':').map(Number)) if (ring[v] < 0) { ring[v] = 0; qq.push(v); }
-      const nbp = Array.from({ length: n }, () => []); for (let t = 0; t < M.I.length; t += 3) { const a = M.I[t], b = M.I[t + 1], c = M.I[t + 2]; nbp[a].push(b, c); nbp[b].push(a, c); nbp[c].push(a, b); }
-      for (let h = 0; h < qq.length; h++) for (const j of nbp[qq[h]]) if (ring[j] < 0) { ring[j] = ring[qq[h]] + 1; qq.push(j); }
-      const inner = []; for (let i = 0; i < n; i++) if (ring[i] >= 3) inner.push(i);
-      const inward = (q) => { let bi = -1, bd = Infinity; for (const i of inner) { const d = Math.hypot(PF[i * 3] - q[0], PF[i * 3 + 1] - q[1], PF[i * 3 + 2] - q[2]); if (d < bd) { bd = d; bi = i; } } if (bi < 0) return null; const u = [PF[bi * 3] - q[0], PF[bi * 3 + 1] - q[1], PF[bi * 3 + 2] - q[2]], l = Math.hypot(...u) || 1; return u.map((x) => x / l); };
-      const st = smoothHoleEdge(fp, near, { inward, maxMove: 0.004 });
-      for (const f of fp) for (let k = 0; k < f.P.length; k++) f.src.femD[k] = f.P[k] - f.src.mesh.P[k];
-      console.log(`genital hole edge smoothed (female): ${st.moved} of ${st.edgeVerts} edge vertices, up to ${(st.maxMove * 1000).toFixed(1)} mm`);
-    }
-    // laid flush under the neighbouring skin where they overlap (no step along the seam); a surface
-    // touch only, so it stays out of the lift that the structures near the patch follow
-    const others = around.map((p) => ({ P: p.mesh.P, D: p.femD, I: p.mesh.I }));
-    const ov = overlayPatch(patch, others, { above: -0.0002, reach: 0.008, smooth: 6 });
-    console.log(`pudendal patch: seated under its neighbours at ${ov.moved} vertices, up to ${(ov.maxLift * 1000).toFixed(1)} mm`);
-    console.log(`pudendal patch: pulled onto the female crotch, ${L.hits} of ${L.n} vertices, up to ${(L.maxMove * 100).toFixed(1)} cm`);
-  }
-}
+computeSkinNative(maleSkin(), fem, skinRegion);
 // Female offset for anything inside the body: near the skin it follows the closest skin (inverse
 // distance over the skin of that body region, so a finger follows its own finger and not the
 // thigh beside it); deeper it blends into the smooth field. Breast skin is ignored (weight).
+// Hand segments (male space): the finger a point belongs to (0 thumb .. 4 little; the thumb's
+// metacarpal counts as the thumb) or the palm (5), by its nearest hand bone; -1 away from the hands.
+// Points follow skin of their own segment only, so a vessel between two fingers is not split
+// between them (and stretched across the gap) where her fingers sit differently from his.
+const handLabel = (() => {
+  const ORD = ['first', 'second', 'third', 'fourth', 'fifth'], HB = 0.02, G = new Map(), key = (x, y, z) => ((x + 200) * 1000 + (y + 200)) * 1000 + (z + 200);
+  for (const p of allParts) {
+    if (p.sys !== 'skeleton' || !p.side) continue;
+    const m = p.name.match(/^(?:Proximal|Middle|Distal) phalanx of (first|second|third|fourth|fifth) finger of hand$/), mc = p.name.match(/^(First|Second|Third|Fourth|Fifth) metacarpal bone$/);
+    const lab = m ? ORD.indexOf(m[1]) : mc ? (mc[1] === 'First' ? 0 : 5) : -1; if (lab < 0) continue;
+    const P = p.mesh.P; for (let k = 0; k < P.length; k += 6) { const kk = key(Math.floor(P[k] / HB), Math.floor(P[k + 1] / HB), Math.floor(P[k + 2] / HB)); (G.get(kk) || G.set(kk, []).get(kk)).push([P[k], P[k + 1], P[k + 2], lab]); }
+  }
+  return (q) => {
+    if (Math.abs(q[0]) < 0.17 || q[1] > 0.95) return -1;
+    const gx = Math.floor(q[0] / HB), gy = Math.floor(q[1] / HB), gz = Math.floor(q[2] / HB); let bd = 0.04, lab = -1;
+    for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) for (let k = -2; k <= 2; k++) for (const s of G.get(key(gx + i, gy + j, gz + k)) || []) { const d = Math.hypot(s[0] - q[0], s[1] - q[1], s[2] - q[2]); if (d < bd) { bd = d; lab = s[3]; } }
+    return lab;
+  };
+})();
 const femInside = (() => {
   const S = [];
   // (the pudendal patch enters with its offsets from before it was pulled in; that move is added
   // separately below, to everything near it)
-  for (const p of maleSkin()) { const P = p.mesh.P, D = p.femD0 || p.femD; for (let k = 0; k < P.length / 3; k++) S.push({ x: P[k * 3], y: P[k * 3 + 1], z: P[k * 3 + 2], d: [D[k * 3], D[k * 3 + 1], D[k * 3 + 2]], w: (1 - p.femB[k]) ** 2, r: skinRegion(p.name, P[k * 3]), patch: p.sex === 2 }); }
+  for (const p of maleSkin()) { const P = p.mesh.P, D = p.femD0 || p.femD; for (let k = 0; k < P.length / 3; k++) S.push({ x: P[k * 3], y: P[k * 3 + 1], z: P[k * 3 + 2], d: [D[k * 3], D[k * 3 + 1], D[k * 3 + 2]], w: (1 - p.femB[k]) ** 2, r: skinRegion(p.name, P[k * 3]), f: handLabel([P[k * 3], P[k * 3 + 1], P[k * 3 + 2]]), patch: p.sex === 2 }); }
   const lifted = allParts.find((p) => p.liftD), LC = 0.01, LG = new Map();
   if (lifted) { const P = lifted.mesh.P; for (let k = 0; k < P.length / 3; k++) { const key = Math.floor(P[k * 3] / LC) + ',' + Math.floor(P[k * 3 + 1] / LC) + ',' + Math.floor(P[k * 3 + 2] / LC); (LG.get(key) || LG.set(key, []).get(key)).push(k); } }
   // the patch's pull, carried by whatever lies within 1.5 cm of it and fading out by 4.5 cm
@@ -745,13 +729,14 @@ const femInside = (() => {
   const skinFollow = (q, withPatch) => {
     const c = cellOf(q[0], q[1], q[2]); if (c < 0 || !near[c]) return null;
     let dmin = Infinity, nr = null;
-    const nearest = (s) => { if (s.patch && !withPatch) return; const d = Math.hypot(s.x - q[0], s.y - q[1], s.z - q[2]); if (d < dmin) { dmin = d; nr = s; } };
+    const ql = handLabel(q);
+    const nearest = (s) => { if ((s.patch && !withPatch) || (ql >= 0 && s.f !== ql)) return; const d = Math.hypot(s.x - q[0], s.y - q[1], s.z - q[2]); if (d < dmin) { dmin = d; nr = s; } };
     scan(q, 1, nearest); if (dmin > C) scan(q, 3, nearest);
     if (!nr || dmin > 0.025) return null;
     const rI = Math.min(0.03, 2 * dmin + 0.004);
     let W = 0, W0 = 0; const acc = [0, 0, 0];
     scan(q, Math.ceil(rI / C), (s) => {
-      if ((s.patch && !withPatch) || s.r !== nr.r) return;
+      if ((s.patch && !withPatch) || s.r !== nr.r || (ql >= 0 && s.f !== ql)) return;
       const d = Math.hypot(s.x - q[0], s.y - q[1], s.z - q[2]); if (d > rI) return;
       const w0 = 1 / (d ** 4 + 1.6e-11), w = w0 * s.w; W0 += w0; W += w; acc[0] += w * s.d[0]; acc[1] += w * s.d[1]; acc[2] += w * s.d[2];
     });
@@ -908,6 +893,26 @@ function refineMesh(mesh, wantSplit) {
     }
   }
 }
+// The female skin: MakeHuman's female mesh, subdivided, split into this body's named skin regions
+// (mhskin.mjs). Stored in male space (MakeHuman's male fitted onto this skin), with offsets to the
+// female shape like the rest of the skin, so the body morphs between the two skins. Each vertex
+// takes its look (skin, lips, nipples) from the nearest male skin vertex.
+const native = {};
+{
+  const male = maleSkin();
+  const NS = buildNativeSkin(fem.T, male.map((p) => ({ name: p.name, side: p.side, P: p.mesh.P })), { refine: NATIVE_REFINE });
+  native.eyes = NS.eyes; native.lashes = NS.lashes;
+  for (const pc of NS.pieces) {
+    const src = male.find((p) => p.name === pc.name && p.side === pc.side) || male.find((p) => p.name === pc.name);
+    const n = pc.X.length / 3, L = pc.near.map(([pi, k]) => (pi >= 0 && male[pi].mesh.L ? male[pi].mesh.L[k] : src.mesh.L[0]));
+    const mesh = { P: Float32Array.from(pc.X), N: Float32Array.from(pc.NX), I: pc.I, L };
+    const femD = new Float32Array(n * 3); for (let k = 0; k < n * 3; k++) femD[k] = pc.F[k] - pc.X[k];
+    let mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9];
+    for (let k = 0; k < mesh.P.length; k += 3) for (let a = 0; a < 3; a++) { mn[a] = Math.min(mn[a], mesh.P[k + a]); mx[a] = Math.max(mx[a], mesh.P[k + a]); }
+    allParts.push({ id: gid++, sys: 'skin', name: pc.name, side: pc.side || null, groups: src.groups, mesh, mn, mx, c: mn.map((v, i) => (v + mx[i]) / 2), ext: mx.map((v, i) => v - mn[i]), mainCat: src.mainCat, ratio: 1.0, hidden: false, sex: 2, native: true, femD, femN: Float32Array.from(pc.NF), femB: Float32Array.from(pc.B), pg: 0 });
+  }
+  console.log(`female skin: ${NS.pieces.length} regions from MakeHuman's female mesh`);
+}
 // Male nipples (part of the mammary skin): a plane through the surrounding ring lets the doll
 // modes flatten them in the shader.
 const nipples = [];
@@ -1009,9 +1014,9 @@ runFlow('urinary', allParts.filter((p) => p.anim === ANIM.urinary || p.anim === 
 // would end up outside the female skin (the slimmer limbs and groin bring superficial veins and
 // nerves very close to it) is pushed back 0.8 mm under it, along the nearest skin's normal.
 {
-  let parts = 0, verts = 0, nz = 0, pushed = 0; const t0 = Date.now();
+  let parts = 0, verts = 0, nz = 0, pushed = 0, handPushed = 0; const t0 = Date.now();
   const SC = 0.012, SG = new Map(), SK = [];
-  for (const p of maleSkin()) { if (!p.femN) continue; const P = p.mesh.P; for (let k = 0; k < P.length / 3; k++) { const f = [P[k * 3] + p.femD[k * 3], P[k * 3 + 1] + p.femD[k * 3 + 1], P[k * 3 + 2] + p.femD[k * 3 + 2]], id = SK.length; SK.push([...f, p.femN[k * 3], p.femN[k * 3 + 1], p.femN[k * 3 + 2]]); const key = Math.floor(f[0] / SC) + ',' + Math.floor(f[1] / SC) + ',' + Math.floor(f[2] / SC); (SG.get(key) || SG.set(key, []).get(key)).push(id); } }
+  for (const p of allParts.filter((q) => q.native)) { const P = p.mesh.P; for (let k = 0; k < P.length / 3; k++) { const f = [P[k * 3] + p.femD[k * 3], P[k * 3 + 1] + p.femD[k * 3 + 1], P[k * 3 + 2] + p.femD[k * 3 + 2]], id = SK.length; SK.push([...f, p.femN[k * 3], p.femN[k * 3 + 1], p.femN[k * 3 + 2]]); const key = Math.floor(f[0] / SC) + ',' + Math.floor(f[1] / SC) + ',' + Math.floor(f[2] / SC); (SG.get(key) || SG.set(key, []).get(key)).push(id); } }
   // (the skin's local plane from its 4 nearest vertices within 1.2 cm, weighted by closeness)
   const keepInside = (f) => {
     const near = []; const gx = Math.floor(f[0] / SC), gy = Math.floor(f[1] / SC), gz = Math.floor(f[2] / SC);
@@ -1023,21 +1028,212 @@ runFlow('urinary', allParts.filter((p) => p.anim === ANIM.urinary || p.anim === 
     h /= W; const l = Math.hypot(...nn) || 1;
     return h > -0.0008 ? [-nn[0] / l * (h + 0.0008), -nn[1] / l * (h + 0.0008), -nn[2] / l * (h + 0.0008)] : null;
   };
+  // The female-only pelvic organs (vulva, vagina) were laid out for the earlier female crotch;
+  // MakeHuman's sits higher. Whatever hangs below her skin (a vertical ray up from it enters the
+  // body through the crotch, cleft included) is lifted 1.5 mm inside, and the lift spreads to
+  // the rest of these organs nearby so they move together.
+  {
+    const tri = [];
+    const disp = (q) => { const dy = q[1] - VULVA.yc, dz = q[2] - VULVA.zc, r = Math.hypot(dy, dz); if (r < 0.03 || r > 0.12 || Math.abs(q[0]) > 0.05) return [0, 0, 0]; const ss = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }; const amt = vulvaAmount(q[0], Math.atan2(dy, dz)) * ss(0.03, 0.04, r) * (1 - ss(0.1, 0.12, r)); return [0, dy / r * amt, dz / r * amt]; };
+    for (const p of allParts.filter((q) => q.native)) {
+      // (weighted by how the skin faces the cleft, as the shader does on her skin)
+      const P = p.mesh.P, I = p.mesh.I, D = p.femD, N = p.mesh.N, F = (k) => { const q = [P[k * 3], P[k * 3 + 1], P[k * 3 + 2]], d = disp(q), ry = q[1] - VULVA.yc, rz = q[2] - VULVA.zc, rl = Math.hypot(ry, rz) || 1, c = (N[k * 3 + 1] * ry + N[k * 3 + 2] * rz) / rl, t = Math.min(1, Math.max(0, (c - 0.25) / 0.4)), vk = t * t * (3 - 2 * t); return [q[0] + D[k * 3] + d[0] * vk, q[1] + D[k * 3 + 1] + d[1] * vk, q[2] + D[k * 3 + 2] + d[2] * vk]; };
+      for (let t = 0; t < I.length; t += 3) { const a = F(I[t]), b = F(I[t + 1]), c = F(I[t + 2]); if (Math.max(Math.abs(a[0]), Math.abs(b[0]), Math.abs(c[0])) > 0.12 || Math.min(a[1], b[1], c[1]) > 0.95 || Math.max(a[1], b[1], c[1]) < 0.55) continue; tri.push([a, b, c]); }
+    }
+    // first hit going up from q: [y, facing down (= entering the body)]
+    const up = (q) => {
+      let best = null;
+      for (const [a, b, c] of tri) {
+        const x0 = q[0], z0 = q[2];
+        if (x0 < Math.min(a[0], b[0], c[0]) || x0 > Math.max(a[0], b[0], c[0]) || z0 < Math.min(a[2], b[2], c[2]) || z0 > Math.max(a[2], b[2], c[2])) continue;
+        const d = (b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2]); if (Math.abs(d) < 1e-14) continue;
+        const u = ((x0 - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (z0 - a[2])) / d, v = ((b[0] - a[0]) * (z0 - a[2]) - (x0 - a[0]) * (b[2] - a[2])) / d;
+        if (u < 0 || v < 0 || u + v > 1) continue;
+        const y = a[1] + u * (b[1] - a[1]) + v * (c[1] - a[1]); if (y < q[1]) continue;
+        if (!best || y < best[0]) { const ny = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]); best = [y, ny]; }
+      }
+      return best;
+    };
+    // (winding: the skin's triangles face outward; the y component of the face normal decides)
+    let sgn = 0; { const h = up([0, 0.5, 0.03]); if (h) sgn = h[1] < 0 ? 1 : -1; }
+    const organs = allParts.filter((p) => p.femSpace && p.sys !== 'skin' && p.mn[1] < 0.86 && p.mx[1] > 0.62 && Math.abs(p.c[0]) < 0.06 && p.c[2] > -0.06);
+    let lifted = 0, maxL = 0;
+    for (let pass = 0; pass < 3; pass++) {
+      const src = [];
+      for (const p of organs) { const P = p.mesh.P; for (let k = 0; k < P.length; k += 3) { const q = [P[k], P[k + 1], P[k + 2]]; if (q[1] > 0.86) continue; const h = up(q); if (h && h[1] * sgn < 0) src.push([q, h[0] + 0.002 - q[1]]); } }
+      if (!src.length) break;
+      for (const p of organs) {
+        const P = p.mesh.P;
+        for (let k = 0; k < P.length; k += 3) {
+          let dy = 0;
+          for (const [q, l] of src) { const d = Math.hypot(P[k] - q[0], P[k + 1] - q[1], P[k + 2] - q[2]); if (d > 0.02) continue; const t = Math.min(1, Math.max(0, (d - 0.003) / 0.017)); dy = Math.max(dy, l * (1 - t * t * (3 - 2 * t))); }
+          if (dy > 0) { P[k + 1] += dy; maxL = Math.max(maxL, dy); }
+        }
+      }
+      lifted += src.length;
+    }
+    for (const p of organs) { const P = p.mesh.P; let mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9]; for (let k = 0; k < P.length; k += 3) for (let a = 0; a < 3; a++) { mn[a] = Math.min(mn[a], P[k + a]); mx[a] = Math.max(mx[a], P[k + a]); } p.mn = mn; p.mx = mx; p.c = mn.map((v, i) => (v + mx[i]) / 2); p.ext = mx.map((v, i) => v - mn[i]); }
+    console.log(`female pelvic organs lifted under her crotch: ${organs.map((p) => p.name + (p.side ? '.' + p.side : '')).join(', ')}; ${lifted} vertices below it, up to ${(maxL * 1000).toFixed(1)} mm (winding ${sgn})`);
+  }
+  // The hands' anatomy goes bone by bone: each of his finger and metacarpal bones onto the matching
+  // bone of her posed hand (lengths scaled, cross-section a little slimmer), blended between
+  // neighbouring bones, fading back to the field over the wrist. Skin-following alone splits his
+  // longer fingers' contents (stretched across the gaps) where hers are shorter.
+  let femHandLabel = () => -1;
+  const handMap = (() => {
+    const segs = { L: [], R: [] };
+    const rotBetween2 = (a, b) => { const v = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], c = a[0] * b[0] + a[1] * b[1] + a[2] * b[2], k = 1 / (1 + c); return [[v[0] * v[0] * k + c, v[0] * v[1] * k - v[2], v[0] * v[2] * k + v[1]], [v[1] * v[0] * k + v[2], v[1] * v[1] * k + c, v[1] * v[2] * k - v[0]], [v[2] * v[0] * k - v[1], v[2] * v[1] * k + v[0], v[2] * v[2] * k + c]]; };
+    const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+    // joint centres along each chain (his: between neighbouring bone ends; hers: MakeHuman's bone
+    // heads), so both sides measure joint to joint; the last bone keeps the ratio of the one before
+    const CH = [['finger1-1', 'finger1-2', 'finger1-3'], ...[1, 2, 3, 4].map((m) => [`metacarpal${m}`, `finger${m + 1}-1`, `finger${m + 1}-2`, `finger${m + 1}-3`])];
+    // her joints are placed along her finger (MakeHuman's bone chain, head to tip) at his joints'
+    // fractions of his finger's length (MakeHuman's finger joints sit at the webs, not the knuckles)
+    for (const sd of ['L', 'R']) for (const chain of CH) {
+      const E = chain.map((b) => fem.handM[sd][b]), HF = chain.map((b) => fem.T.hand && fem.T.hand[sd][b]); if (E.some((e) => !e) || HF.some((h) => !h)) continue;
+      const J = [E[0][0]]; for (let i = 1; i < E.length; i++) J.push(E[i - 1][1].map((v, a) => (v + E[i][0][a]) / 2)); J.push(E[E.length - 1][1]);
+      const PF = [...HF.map((h) => h[0]), HF[HF.length - 1][1]], dist = (u, v) => Math.hypot(u[0] - v[0], u[1] - v[1], u[2] - v[2]);
+      const cm = [0], cf = [0]; for (let i = 1; i < J.length; i++) { cm.push(cm[i - 1] + dist(J[i], J[i - 1])); cf.push(cf[i - 1] + dist(PF[i], PF[i - 1])); }
+      const Lmt = cm[cm.length - 1], Lft = cf[cf.length - 1] - 0.003; // (her chain ends at the fingertip, his at the bone's tip)
+      const along = (sArc) => { for (let i = 1; i < PF.length; i++) if (sArc <= cf[i] || i === PF.length - 1) { const t = (sArc - cf[i - 1]) / Math.max(1e-9, cf[i] - cf[i - 1]); return PF[i - 1].map((v, a) => v + (PF[i][a] - v) * t); } };
+      const JF = cm.map((c) => along(c / Lmt * Lft));
+      chain.forEach((b, i) => {
+        const A = J[i], um = [0, 1, 2].map((a) => J[i + 1][a] - A[a]), Lm = Math.hypot(...um), H = JF[i], uf = [0, 1, 2].map((a) => JF[i + 1][a] - H[a]), Lf = Math.hypot(...uf);
+        const u = um.map((v) => v / Lm), w = uf.map((v) => v / Lf);
+        segs[sd].push({ b, A, u, Lm, H, w, Lf, R: rotBetween2(u, w), sp: 1, meta: i === 0, lab: chain[0] === 'finger1-1' ? 0 : i === 0 ? 5 : CH.indexOf(chain) });
+      });
+    }
+    // cross-sections: her skin's distance from each bone over his (medians, skin nearest that bone)
+    {
+      const nearSeg = (S, q, his) => { let bd = 0.03, bg = null, bp = 0; for (const g of S) { const A = his ? g.A : g.H, u = his ? g.u : g.w, L = his ? g.Lm : g.Lf, v = [q[0] - A[0], q[1] - A[1], q[2] - A[2]], al = Math.min(L, Math.max(0, v[0] * u[0] + v[1] * u[1] + v[2] * u[2])), d = Math.hypot(v[0] - u[0] * al, v[1] - u[1] * al, v[2] - u[2] * al); if (d < bd) { bd = d; bg = g; } } return bg ? [bg, bd] : null; };
+      const R = new Map();
+      const add = (P, D, his) => { for (let k = 0; k < P.length; k += 3) { const q = [P[k] + (D ? D[k] : 0), P[k + 1] + (D ? D[k + 1] : 0), P[k + 2] + (D ? D[k + 2] : 0)]; if (Math.abs(q[0]) < 0.17 || q[1] > 0.95) continue; const sd = q[0] >= 0 ? 'L' : 'R', h = nearSeg(segs[sd], q, his); if (!h) continue; const key = sd + h[0].lab, e = R.get(key) || R.set(key, [[], []]).get(key); e[his ? 0 : 1].push(h[1]); } };
+      for (const p of maleSkin()) add(p.mesh.P, null, true);
+      for (const p of allParts.filter((q) => q.native)) add(p.mesh.P, p.femD, false);
+      const med = (a) => { const b = a.slice().sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
+      for (const sd of ['L', 'R']) for (const g of segs[sd]) { const e = R.get(sd + g.lab); if (e && e[0].length > 8 && e[1].length > 8) g.sp = Math.min(1.1, Math.max(0.6, med(e[1]) / med(e[0]) * 0.97)); }
+    }
+    if (segs.L.length) { const r = segs.L.map((g) => `${g.b} ${(g.Lf / g.Lm).toFixed(2)}/${g.sp.toFixed(2)}`).join(', '); console.log(`hand bones, her length / his, and thickness: ${r}`); }
+    // which of her fingers (or the palm) a point of her hand belongs to: the nearest of her bones
+    femHandLabel = (f) => { const S = segs[f[0] >= 0 ? 'L' : 'R']; let bd = 0.03, lab = -1; for (const g of S) { const v = [f[0] - g.H[0], f[1] - g.H[1], f[2] - g.H[2]], al = Math.min(g.Lf, Math.max(0, v[0] * g.w[0] + v[1] * g.w[1] + v[2] * g.w[2])), d = Math.hypot(v[0] - g.w[0] * al, v[1] - g.w[1] * al, v[2] - g.w[2] * al); if (d < bd) { bd = d; lab = g.lab; } } return lab; };
+    return (q) => {
+      const S = segs[q[0] >= 0 ? 'L' : 'R']; if (!S.length) return null;
+      const ds = S.map((g) => { const v = [q[0] - g.A[0], q[1] - g.A[1], q[2] - g.A[2]], al = v[0] * g.u[0] + v[1] * g.u[1] + v[2] * g.u[2], t = Math.min(g.Lm, Math.max(0, al)); return { g, v, al, d: Math.hypot(v[0] - g.u[0] * t, v[1] - g.u[1] * t, v[2] - g.u[2] * t) }; });
+      let dmin = Infinity, near = null; for (const e of ds) if (e.d < dmin) { dmin = e.d; near = e; }
+      // fade to the field beyond the metacarpal bases (the wrist) and away from the bones
+      let beta = 1 - sm(0.02, 0.035, dmin);
+      if (near.g.meta && near.al < 0) beta *= 1 - sm(0, 0.025, -near.al);
+      if (beta <= 0) return null;
+      let W = 0; const o = [0, 0, 0];
+      for (const e of ds) {
+        const wt = Math.exp(-(((e.d - dmin) / 0.004) ** 2)); if (wt < 1e-4) continue;
+        const { g, v, al } = e, pp = [v[0] - g.u[0] * al, v[1] - g.u[1] * al, v[2] - g.u[2] * al], rp = [0, 1, 2].map((a) => (g.R[a][0] * pp[0] + g.R[a][1] * pp[1] + g.R[a][2] * pp[2]) * g.sp), s = al * g.Lf / g.Lm;
+        for (let a = 0; a < 3; a++) o[a] += wt * (g.H[a] + g.w[a] * s + rp[a]); W += wt;
+      }
+      return { f: o.map((v) => v / W), beta };
+    };
+  })();
+  // In the hands the fingers are thin and close together, so there the test is the exact one:
+  // the closest point on her skin, and which side of that triangle the point is on.
+  const handInside = (() => {
+    const T = [], HC = 0.005, HG = new Map(), hk = (x, y, z) => ((x + 200) * 1000 + (y + 200)) * 1000 + (z + 200);
+    for (const p of allParts.filter((q) => q.native)) {
+      const P = p.mesh.P, D = p.femD, I = p.mesh.I, F = (k) => [P[k * 3] + D[k * 3], P[k * 3 + 1] + D[k * 3 + 1], P[k * 3 + 2] + D[k * 3 + 2]];
+      for (let t = 0; t < I.length; t += 3) {
+        const a = F(I[t]), b = F(I[t + 1]), c = F(I[t + 2]);
+        if (Math.min(Math.abs(a[0]), Math.abs(b[0]), Math.abs(c[0])) < 0.16 || Math.min(a[1], b[1], c[1]) > 0.98) continue;
+        const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]], n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]], l = Math.hypot(...n) || 1;
+        const id = T.length; T.push([a, b, c, n.map((v) => v / l), femHandLabel([(a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3])]);
+        const lo = [0, 1, 2].map((ax) => Math.floor(Math.min(a[ax], b[ax], c[ax]) / HC)), hi = [0, 1, 2].map((ax) => Math.floor(Math.max(a[ax], b[ax], c[ax]) / HC));
+        for (let i = lo[0]; i <= hi[0]; i++) for (let j = lo[1]; j <= hi[1]; j++) for (let k = lo[2]; k <= hi[2]; k++) { const key = hk(i, j, k); (HG.get(key) || HG.set(key, []).get(key)).push(id); }
+      }
+    }
+    // (outward normals: the winding is checked once on a fingertip-free spot, the back of the hand)
+    const closest = (p, a, b, c) => { // Ericson, Real-Time Collision Detection 5.1.5
+      const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]], ap = [p[0] - a[0], p[1] - a[1], p[2] - a[2]];
+      const dt = (u, v) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2], at = (s, t) => [a[0] + ab[0] * s + ac[0] * t, a[1] + ab[1] * s + ac[1] * t, a[2] + ab[2] * s + ac[2] * t];
+      const d1 = dt(ab, ap), d2 = dt(ac, ap); if (d1 <= 0 && d2 <= 0) return a;
+      const bp = [p[0] - b[0], p[1] - b[1], p[2] - b[2]], d3 = dt(ab, bp), d4 = dt(ac, bp); if (d3 >= 0 && d4 <= d3) return b;
+      const vc = d1 * d4 - d3 * d2; if (vc <= 0 && d1 >= 0 && d3 <= 0) return at(d1 / (d1 - d3), 0);
+      const cp = [p[0] - c[0], p[1] - c[1], p[2] - c[2]], d5 = dt(ab, cp), d6 = dt(ac, cp); if (d6 >= 0 && d5 <= d6) return c;
+      const vb = d5 * d2 - d1 * d6; if (vb <= 0 && d2 >= 0 && d6 <= 0) return at(0, d2 / (d2 - d6));
+      const va = d3 * d6 - d5 * d4; if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) { const w = (d4 - d3) / ((d4 - d3) + (d5 - d6)); return [b[0] + (c[0] - b[0]) * w, b[1] + (c[1] - b[1]) * w, b[2] + (c[2] - b[2]) * w]; }
+      const den = 1 / (va + vb + vc); return at(vb * den, vc * den);
+    };
+    const query = (f, lab = -1) => {
+      const g = [0, 1, 2].map((ax) => Math.floor(f[ax] / HC)); let best = null, bd = 0.012;
+      const seen = new Set();
+      for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) for (let k = -2; k <= 2; k++) for (const id of HG.get(hk(g[0] + i, g[1] + j, g[2] + k)) || []) {
+        if (seen.has(id)) continue; seen.add(id);
+        if (lab >= 0 && T[id][4] !== lab) continue;
+        const [a, b, c, n] = T[id], q = closest(f, a, b, c), d = Math.hypot(f[0] - q[0], f[1] - q[1], f[2] - q[2]);
+        if (d < bd - 1e-9) { bd = d; best = [q, n, d]; } else if (best && Math.abs(d - bd) < 1e-9) { const n2 = [best[1][0] + n[0], best[1][1] + n[1], best[1][2] + n[2]], l = Math.hypot(...n2) || 1; best = [q, n2.map((v) => v / l), d]; }
+      }
+      return best;
+    };
+    // winding: from far outside a fingertip-free spot (beside the back of the hand), the closest triangle faces us
+    let wind = 1; { const hb = allParts.find((p) => p.native && /^Dorsum of hand$/.test(p.name) && p.side === 'L'); if (hb) { const P = hb.mesh.P, D = hb.femD, k = Math.floor(P.length / 6) * 3, v = [P[k] + D[k], P[k + 1] + D[k + 1], P[k + 2] + D[k + 2]], n = hb.femN ? [hb.femN[k], hb.femN[k + 1], hb.femN[k + 2]] : null; if (n) { const out = [v[0] + n[0] * 0.004, v[1] + n[1] * 0.004, v[2] + n[2] * 0.004], h = query(out); if (h) wind = (out[0] - h[0][0]) * h[1][0] + (out[1] - h[0][1]) * h[1][1] + (out[2] - h[0][2]) * h[1][2] > 0 ? 1 : -1; } } }
+    console.log(`hand skin for the exact inside test: ${T.length} triangles (winding ${wind})`);
+    return (f, lab) => {
+      if (Math.abs(f[0]) < 0.17 || f[1] > 0.97) return null;
+      const h = query(f, lab); if (!h) return null;
+      const [q, n0] = h, n = n0.map((v) => v * wind), s = (f[0] - q[0]) * n[0] + (f[1] - q[1]) * n[1] + (f[2] - q[2]) * n[2];
+      return s > -0.0006 ? [q[0] - n[0] * 0.0006 - f[0], q[1] - n[1] * 0.0006 - f[1], q[2] - n[2] * 0.0006 - f[2]] : null;
+    };
+  })();
+  // this body's eyeball centres (sclera) and where the female's eyes are
+  const eyeMove = ['R', 'L'].map((sd) => { const sc = allParts.find((p) => p.sys === 'nerves' && p.name === 'Sclera' && p.side === sd); if (!sc || !native.eyes) return null; const c = sc.c, to = native.eyes[sd].c; return { c, d: [to[0] - c[0], to[1] - c[1], to[2] - c[2]] }; }).filter(Boolean);
+  for (const e of eyeMove) console.log(`eye moved into the female's socket by ${e.d.map((v) => (v * 1000).toFixed(1)).join(', ')} mm`);
+  for (const sd of ['R', 'L']) { const sc = allParts.find((p) => p.sys === 'nerves' && p.name === 'Sclera' && p.side === sd); if (sc && native.eyes) console.log(`eye ${sd}: sclera extent ${sc.ext.map((v) => (v * 1000).toFixed(1)).join(' x ')} mm, MakeHuman eyeball radius ${(native.eyes[sd].r * 1000).toFixed(1)} mm`); }
   for (const p of allParts) {
     if (p.sys === 'skin' || p.femSpace) continue;
     const P = p.mesh.P, n = P.length / 3; let R = null;
     for (let k = 0; k < n; k++) {
       const q = [P[k * 3], P[k * 3 + 1], P[k * 3 + 2]];
       let r = femInside(q, p.sex === 2);
-      const fa = fem.at(q), f = [q[0] + fa[0] + (r ? r[0] : 0), q[1] + fa[1] + (r ? r[1] : 0), q[2] + fa[2] + (r ? r[2] : 0)], push = keepInside(f);
-      if (push) { r = r ? [r[0] + push[0], r[1] + push[1], r[2] + push[2]] : push; pushed++; }
+      const fa = fem.at(q);
+      // the eyes go rigidly into the female's eye sockets (fading into the field by 4 cm away)
+      let inEye = false;
+      for (const e of eyeMove) { const d = Math.hypot(q[0] - e.c[0], q[1] - e.c[1], q[2] - e.c[2]); if (d > 0.04) continue; const t = Math.min(1, Math.max(0, (d - 0.022) / 0.018)), w = 1 - t * t * (3 - 2 * t); r = [0, 1, 2].map((a) => (r ? r[a] : 0) * (1 - w) + (e.d[a] - fa[a]) * w); if (d < 0.017) inEye = true; }
+      if (!inEye) { const hm = handLabel(q) >= 0 || Math.abs(q[0]) > 0.17 && q[1] < 0.95 ? handMap(q) : null; if (hm) { const cur = [0, 1, 2].map((a) => q[a] + fa[a] + (r ? r[a] : 0)); r = [0, 1, 2].map((a) => cur[a] * (1 - hm.beta) + hm.f[a] * hm.beta - q[a] - fa[a]); } }
+      // (not the eyeballs: they sit in the opening between the lids, which the lids' plane would cut;
+      // not the hands either, which get the exact test below)
+      const hl = handLabel(q);
+      for (let it = 0; it < 2 && !inEye && hl < 0; it++) {
+        const f = [q[0] + fa[0] + (r ? r[0] : 0), q[1] + fa[1] + (r ? r[1] : 0), q[2] + fa[2] + (r ? r[2] : 0)], push = keepInside(f);
+        if (!push) break;
+        r = r ? [r[0] + push[0], r[1] + push[1], r[2] + push[2]] : push; if (!it) pushed++;
+      }
       if (!r || Math.abs(r[0]) + Math.abs(r[1]) + Math.abs(r[2]) < 0.0002) continue;
       if (!R) R = new Float32Array(n * 3);
       R[k * 3] = r[0]; R[k * 3 + 1] = r[1]; R[k * 3 + 2] = r[2]; nz++;
     }
+    // the hands: whatever ends up outside her skin is pushed in, the push spread over the mesh a
+    // few rounds so neighbouring vertices move together (a vertex-by-vertex push sends neighbours
+    // to different sides of a knuckle or web, and the triangles between them stretch outside)
+    {
+      const H = [], lab = [], fa0 = [];
+      for (let k = 0; k < n; k++) { const q = [P[k * 3], P[k * 3 + 1], P[k * 3 + 2]]; if (Math.abs(q[0]) > 0.17 && q[1] < 0.95) { H.push(k); lab.push(handLabel(q)); fa0.push(fem.at(q)); } }
+      if (H.length) {
+        if (!R) R = new Float32Array(n * 3);
+        const slot = new Int32Array(n).fill(-1); H.forEach((k, i) => { slot[k] = i; });
+        const nb = H.map(() => []), I = p.mesh.I;
+        for (let t = 0; t < I.length; t += 3) for (const [a, b] of [[I[t], I[t + 1]], [I[t + 1], I[t + 2]], [I[t + 2], I[t]]]) { const sa = slot[a], sb = slot[b]; if (sa >= 0 && sb >= 0) { nb[sa].push(sb); nb[sb].push(sa); } }
+        const pos = (i) => { const k = H[i]; return [P[k * 3] + fa0[i][0] + R[k * 3], P[k * 3 + 1] + fa0[i][1] + R[k * 3 + 1], P[k * 3 + 2] + fa0[i][2] + R[k * 3 + 2]]; };
+        let push = new Float32Array(H.length * 3);
+        for (let round = 0; round < 9; round++) {
+          let any = 0; push.fill(0);
+          for (let i = 0; i < H.length; i++) { const hp = handInside(pos(i), lab[i]); if (hp) { push[i * 3] = hp[0]; push[i * 3 + 1] = hp[1]; push[i * 3 + 2] = hp[2]; any++; } }
+          if (!any) break;
+          if (round === 0) handPushed += any;
+          if (round < 8) for (let it = 0; it < 6; it++) { const nx = new Float32Array(push.length); for (let i = 0; i < H.length; i++) { let w = 2; const acc = [push[i * 3] * 2, push[i * 3 + 1] * 2, push[i * 3 + 2] * 2]; for (const j of nb[i]) { acc[0] += push[j * 3]; acc[1] += push[j * 3 + 1]; acc[2] += push[j * 3 + 2]; w++; } nx[i * 3] = acc[0] / w; nx[i * 3 + 1] = acc[1] / w; nx[i * 3 + 2] = acc[2] / w; } push = nx; }
+          for (let i = 0; i < H.length; i++) { const k = H[i]; R[k * 3] += push[i * 3]; R[k * 3 + 1] += push[i * 3 + 1]; R[k * 3 + 2] += push[i * 3 + 2]; }
+        }
+      }
+    }
     verts += n; if (R) { p.femR = R; parts++; }
   }
-  console.log(`female residuals: ${parts} parts, ${nz} of ${verts} vertices near the skin, ${pushed} kept under it (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+  console.log(`female residuals: ${parts} parts, ${nz} of ${verts} vertices near the skin, ${pushed} kept under it, ${handPushed} in the hands (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
 }
 // Base geometry (decimated) and hi packs
 function simplified(p) {
@@ -1085,7 +1281,10 @@ for (const p of allParts) { // centre of the part in the female body
 // Hair (skin view): scalp hair, eyebrows and eyelashes for both bodies (hair.mjs)
 {
   const skin = maleSkin().filter((p) => p.femN).map((p) => ({ name: p.name, side: p.side, P: p.mesh.P, D: p.femD, N: p.mesh.N, FN: p.femN, I: p.mesh.I }));
-  const hair = buildHair({ skin, face: fem.face, eyes: fem.eyes });
+  // (the female's hair grows from her own skin, the male's from his)
+  const nat = allParts.filter((p) => p.native).map((p) => ({ name: p.name, side: p.side, P: p.mesh.P, D: p.femD, N: p.mesh.N, FN: p.femN, I: p.mesh.I }));
+  const hf = buildHair({ skin: nat, face: fem.face, eyes: fem.eyes, lashCards: native.lashes }), hm = buildHair({ skin, face: fem.face, eyes: fem.eyes });
+  const hair = { groups: [...hf.groups.filter((g) => g.sex === 'female'), ...hm.groups.filter((g) => g.sex === 'male')], frame: hm.frame };
   const bbox = [[-0.3, 1.0, -0.4], [0.3, 1.9, 0.25]];
   const { buffer, meta } = packHair(hair.groups, bbox);
   const gz = zlib.gzipSync(buffer, { level: 9 });
@@ -1093,8 +1292,11 @@ for (const p of allParts) { // centre of the part in the female body
   manifest.hair = { file: 'base/hair.mvb', bytes: gz.length, bbox, groups: meta, frame: hair.frame, hairline: HAIRLINE };
   console.log('hair:', meta.map((m) => `${m.id} ${m.strands}x${m.points}`).join(', '), (gz.length / 1e6).toFixed(2), 'MB');
 }
+// The two skins: this body's skin is now the male's only (the female has MakeHuman's), and the
+// pudendal fill becomes the male doll crotch (pg 3: shown only in the doll modes, for its own sex)
+for (const p of maleSkin()) { if (p.name === 'Pudendal region') { p.sex = 1; p.pg = 3; } else if (!p.sex) p.sex = 1; }
 manifest.partFields = ['id', 'sys', 'name', 'side', 'groups', 'center', 'extent', 'hidden', 'sex', 'anim', 'pivot', 'axis', 'region', 'flags', 'femaleOffset', 'pg', 'femaleCenter'];
-manifest.parts = allParts.map((p) => [p.id, p.sys, p.name, p.side, p.groups.join('>'), p.c.map(r4), p.ext.map(r4), p.hidden ? 1 : 0, p.sex, p.anim, p.pivot.map(r4), p.axis.map((v) => +v.toFixed(3)), p.region, p.femSpace ? 4 : 0, (FEMALE_OFFSET[p.name] || [0, 0, 0]), p.pg || 0, p.cF.map(r4)]);
+manifest.parts = allParts.map((p) => [p.id, p.sys, p.name, p.side, p.groups.join('>'), p.c.map(r4), p.ext.map(r4), p.hidden ? 1 : 0, p.sex, p.anim, p.pivot.map(r4), p.axis.map((v) => +v.toFixed(3)), p.region, (p.femSpace ? 4 : 0) + (p.native ? 8 : 0), (FEMALE_OFFSET[p.name] || [0, 0, 0]), p.pg || 0, p.cF.map(r4)]);
 // Eyes: iris centre, facing axis (least-variance direction of the iris disc) and radii, for the shader
 const eyes = [];
 for (const side of ['R', 'L']) {

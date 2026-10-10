@@ -430,7 +430,7 @@ $('#btn-restore').addEventListener('click', restoreAll);
 // Is this part in the body being shown? Doll mode (Ken / Barbie) hides the genitals (pg 1)
 // and shows the smoothed-over replacements (pg 2) in both bodies.
 function sexOk(p) {
-  if (state.pg) { if (p.pg === 1) return false; if (p.pg === 2) return true; }
+  if (state.pg) { if (p.pg === 1) return false; if (p.pg === 2) return true; } else if (p.pg === 3) return false; // 3: doll modes only (the male doll crotch)
   return p.sex === 0 || (p.sex === 1 && state.female < 0.5) || (p.sex === 2 && state.female >= 0.5);
 }
 function recomputeStates() {
@@ -951,7 +951,7 @@ function openSheet(p) {
   setSheetHead(p.sys, p.side, p.title, crumbs, sizeText(p.ext));
   let html = infoHtml(info, p.name) || `<p class="lede">${escapeHtml(p.title)} belongs to the ${escapeHtml(SYS_NOUN[p.sys].toLowerCase())}.</p>`;
   if (p.modeled) html += `<p class="modeled">Modeled from standard adult measurements, not from scan data.</p>`;
-  if (state.pg && p.pg === 2) html += `<p class="modeled">${pgName()} is on, so the genitals are smoothed over here.</p>`;
+  if (state.pg && (p.pg === 2 || p.pg === 3)) html += `<p class="modeled">${pgName()} is on, so the genitals are smoothed over here.</p>`;
   if (crumbs) html += `<p class="hint-line">Tap a name above the title to select the whole structure it belongs to.</p>`;
   $('#sheet-body').innerHTML = html;
   if (!refs) loadRefs().then(() => { if (state.selected === p.id) openSheet(p); });
@@ -1261,7 +1261,7 @@ function wordScore(alt, tokens) { // 3 exact word, 2 word prefix, 1 close (typo 
 // their hidden parts out of search
 function otherBody(s) {
   const other = state.female >= 0.5 ? 1 : 2;
-  const fits = (p) => p.sex === other && !(state.pg && p.pg === 1);
+  const fits = (p) => p.sex === other && !(state.pg && p.pg === 1) && !(!state.pg && p.pg === 3);
   return s.kind === 'p' ? fits(s.p) : s.g.ids.some((i) => fits(parts[i]));
 }
 function renderSearch(q) {
@@ -1272,8 +1272,11 @@ function renderSearch(q) {
   else {
     const groups = parseQuery(q), ql = q.toLowerCase();
     const scored = [];
+    // (each body has its own skin, region by region under the same names: the other body's skin
+    // regions are not offered again)
+    const skinHere = new Set(); for (const s of searchIndex) if (s.kind === 'p' && s.p.sys === 'skin' && ok(s)) skinHere.add(s.p.name + '|' + s.p.side);
     for (const s of searchIndex) {
-      const here = ok(s), there = !here && otherBody(s);
+      const here = ok(s), there = !here && otherBody(s) && !(s.kind === 'p' && s.p.sys === 'skin' && skinHere.has(s.p.name + '|' + s.p.side));
       if (!here && !there) continue;
       let sc = 0, fuzzy = false;
       for (const g of groups) {
@@ -1688,7 +1691,8 @@ async function init() {
   }));
   for (const p of parts) {
     p.title = prettyName(p.name);
-    p.modeled = p.sex === 2 && (p.sys === 'organs' || p.name === 'Pudendal region' || /Breast|Nipple|Ovarian|Uterine artery/.test(p.name));
+    p.native = (p.flags & 8) !== 0; // the female's skin, from MakeHuman's female mesh
+    p.modeled = p.sex === 2 && !p.native && (p.sys === 'organs' || /Breast|Nipple|Ovarian|Uterine artery/.test(p.name));
     p.cF = femaleCenter(p);
     if (HOLLOW.test(p.name) || (p.sys === 'vessels' && !/atrium|ventricle|leaflet|papillary/i.test(p.name))) p.flags |= 2;
   }

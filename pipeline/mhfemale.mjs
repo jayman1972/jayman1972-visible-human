@@ -170,6 +170,50 @@ export function makeFemaleTransfer(our, opts = {}) {
     poseLimb(Mo, Fo, side, wLeg, wShin, `upperleg01.${side}____head`, `lowerleg01.${side}____head`, `foot.${side}____head`, our.joints.hip, our.joints.knee, our.joints.ankle);
   };
   poseBoth('L'); poseBoth('R');
+  // twist each forearm so the hand faces the way this body's does (MakeHuman's palms face the
+  // thighs; this body stands in the anatomical position, palms forward): the thumb-to-little-finger
+  // line, seen down the forearm, is turned onto this body's
+  const rotAxis = (k, a) => { const c = Math.cos(a), s2 = Math.sin(a), t = 1 - c; return [[t * k[0] * k[0] + c, t * k[0] * k[1] - s2 * k[2], t * k[0] * k[2] + s2 * k[1]], [t * k[0] * k[1] + s2 * k[2], t * k[1] * k[1] + c, t * k[1] * k[2] - s2 * k[0]], [t * k[0] * k[2] - s2 * k[1], t * k[1] * k[2] + s2 * k[0], t * k[2] * k[2] + c]]; };
+  const wHandT = { L: chainW(/^(wrist|metacarpal\d|finger\d-\d)\.L$/), R: chainW(/^(wrist|metacarpal\d|finger\d-\d)\.R$/) };
+  const wLow2 = { L: chainW(/^lowerarm02\.L$/), R: chainW(/^lowerarm02\.R$/) };
+  const twist = {};
+  for (const side of ['L', 'R']) {
+    if (!our.joints.thumb || !our.joints.little) break;
+    const sg = side === 'L' ? 1 : -1, mir = (q) => [q[0] * sg, q[1], q[2]];
+    const e0 = joint(Mo, `lowerarm01.${side}____head`), ax = norm(sub(joint(Mo, `wrist.${side}____head`), e0));
+    const flat = (v) => norm(sub(v, mul(ax, dot(v, ax))));
+    const vm = flat(sub(joint(Mo, `finger1-3.${side}____tail`), joint(Mo, `finger5-3.${side}____tail`)));
+    const vo = flat(sub(mir(our.joints.thumb), mir(our.joints.little)));
+    const ang = Math.atan2(dot(cross(vm, vo), ax), dot(vm, vo));
+    twist[side] = ang;
+    for (const X of [Mo, Fo]) {
+      const e = joint(X, `lowerarm01.${side}____head`), k = norm(sub(joint(X, `wrist.${side}____head`), e));
+      for (let i = 0; i < X.length; i++) { const w = Math.min(1, wHandT[side][i] + 0.6 * wLow2[side][i]); if (w <= 0) continue; X[i] = add(e, mv(rotAxis(k, ang * w), sub(X[i], e))); }
+    }
+  }
+  if (twist.L !== undefined) log(`  forearm twist: L ${(twist.L * 180 / Math.PI).toFixed(0)} deg, R ${(twist.R * 180 / Math.PI).toFixed(0)} deg`);
+  // then each finger, bone by bone from the palm out, turned onto this body's bones (our.hand:
+  // MakeHuman bone -> [proximal end, distal end] of the matching bone of this body's left hand), so
+  // the two hands agree finger by finger (MakeHuman's rest hand is flatter, its thumb elsewhere)
+  if (our.joints.hand) {
+    const CH = [['finger1-1', 'finger1-2', 'finger1-3'], ...[1, 2, 3, 4].map((m) => [`metacarpal${m}`, `finger${m + 1}-1`, `finger${m + 1}-2`, `finger${m + 1}-3`])];
+    let worst = 0;
+    for (const side of ['L', 'R']) {
+      const sg = side === 'L' ? 1 : -1, mir = (q) => [q[0] * sg, q[1], q[2]];
+      for (const chain of CH) chain.forEach((b, i) => {
+        const tgt = our.joints.hand[b]; if (!tgt) return;
+        const w = chainW(new RegExp(`^(${chain.slice(i).join('|')})\\.${side}$`));
+        const h = joint(Mo, `${b}.${side}____head`), t = joint(Mo, `${b}.${side}____tail`);
+        const R = rotBetween(sub(t, h), sub(mir(tgt[1]), mir(tgt[0])));
+        worst = Math.max(worst, Math.acos(Math.max(-1, Math.min(1, dot(norm(sub(t, h)), norm(sub(mir(tgt[1]), mir(tgt[0]))))))));
+        for (const X of [Mo, Fo]) {
+          const hx = joint(X, `${b}.${side}____head`);
+          for (let k = 0; k < X.length; k++) { if (w[k] <= 0) continue; X[k] = add(X[k], mul(sub(add(hx, mv(R, sub(X[k], hx))), X[k]), Math.min(1, w[k]))); }
+        }
+      });
+    }
+    log(`  fingers posed bone by bone (largest turn ${(worst * 180 / Math.PI).toFixed(0)} deg)`);
+  }
   const D = Mo.map((p, i) => sub(Fo[i], p)); // female - male, in our space and pose
 
   // MakeHuman vertex regions and normals
@@ -231,9 +275,13 @@ export function makeFemaleTransfer(our, opts = {}) {
     }
     if (!best) return null;
     const [t, u, v, w] = best;
-    return { d: add(add(mul(D[t[0]], u), mul(D[t[1]], v)), mul(D[t[2]], w)), breast: wBreast[t[0]] * u + wBreast[t[1]] * v + wBreast[t[2]] * w, dist: bd };
+    return { d: add(add(mul(D[t[0]], u), mul(D[t[1]], v)), mul(D[t[2]], w)), nat: add(add(mul(Fo[t[0]], u), mul(Fo[t[1]], v)), mul(Fo[t[2]], w)), breast: wBreast[t[0]] * u + wBreast[t[1]] * v + wBreast[t[2]] * w, dist: bd };
   }
-  return { dispAt, fitted: X, female: X.map((p, i) => add(p, D[i])), tris, ids, reg, D, breastW: wBreast };
+  // native: MakeHuman's own female mesh, posed and scaled into this body's space (with its groups)
+  // her hand bones (head, tail) as posed, for mapping the hand's anatomy bone by bone
+  const hand = {};
+  for (const side of ['L', 'R']) { hand[side] = {}; for (const b of ['finger1-1', 'finger1-2', 'finger1-3', ...[1, 2, 3, 4].flatMap((m) => [`metacarpal${m}`, `finger${m + 1}-1`, `finger${m + 1}-2`, `finger${m + 1}-3`])]) hand[side][b] = [joint(Fo, `${b}.${side}____head`), joint(Fo, `${b}.${side}____tail`)]; }
+  return { dispAt, fitted: X, female: X.map((p, i) => add(p, D[i])), tris, ids, reg, D, breastW: wBreast, native: Fo, groups, hand };
 }
 
 /**

@@ -87,6 +87,7 @@ varying float vFlags;
 varying float vPid;
 varying float vState;
 varying float vCavity;
+varying float vSexVis; // the two skins dissolve into each other as the body changes (female negative)
 
 vec3 anatAnimate(vec3 p, vec3 n, float code, vec3 pivot, float flow) {
   int c = int(code + 0.5);
@@ -117,11 +118,23 @@ void anatomyVertex(out vec3 outPos, inout vec3 n, out float cull) {
   float hi = floor(pd.w / 10.0 + 0.001);
   float st = pd.w - hi * 10.0;
   vState = st;
-  float pgc = floor(fd.w / 4.0 + 0.01);           // doll-mode class: 1 hide, 2 always show
+  float pgc = floor(fd.w / 4.0 + 0.01);           // doll-mode class: 1 hide, 2 always show, 3 doll modes only
   float sex = fd.w - pgc * 4.0;
   bool dolls = uPG >= 0.5;
-  bool sexHidden = (dolls && pgc > 0.5 && pgc < 1.5) ||
-    (!(dolls && pgc > 1.5) && ((sex > 0.5 && sex < 1.5 && uFemale >= 0.5) || (sex > 1.5 && uFemale < 0.5)));
+  bool dollsBoth = dolls && pgc > 1.5 && pgc < 2.5;
+  bool pgHidden = (dolls && pgc > 0.5 && pgc < 1.5) || (pgc > 2.5 && !dolls);
+  bool femSpaceP = mod(floor(xd.w / 4.0 + 0.01), 2.0) > 0.5;
+  bool sexHidden = pgHidden ||
+    (!dollsBoth && ((sex > 0.5 && sex < 1.5 && uFemale >= (uIsSkin < 0.5 ? 0.03 : 0.5)) || (sex > 1.5 && uFemale < (femSpaceP && uIsSkin < 0.5 ? 0.97 : 0.5))));
+  // (the sex-specific organs leave as soon as the body starts changing and arrive once it has: the
+  // skin around them in between is neither body's)
+  // the male and female skins: both drawn while the body changes, dissolving into each other
+  vSexVis = 1.0;
+  if (uIsSkin > 0.5 && sex > 0.5 && !dollsBoth) {
+    float f = smoothstep(0.3, 0.7, uFemale);
+    vSexVis = sex < 1.5 ? 1.0 - f : -f; // (negative: the female skin, which takes the other half of the dither)
+    sexHidden = pgHidden || abs(vSexVis) < 0.002;
+  }
   bool lodHidden = (hi > 0.5) != (uLodPass > 0.5);
   cull = (st < 0.5 || sexHidden || lodHidden) ? 1.0 : 0.0;
   vec3 p0 = position * uQScale + uQMin;  // male rest position
@@ -129,6 +142,7 @@ void anatomyVertex(out vec3 outPos, inout vec3 n, out float cull) {
   vec3 p = anatAnimate(p0, n, ad.x, ad.yzw, aFlow);
   bool skin = uIsSkin > 0.5;
   bool femSpace = mod(floor(xd.w / 4.0 + 0.01), 2.0) > 0.5; // female-only parts are stored in the female shape
+  bool nativeSkin = mod(floor(xd.w / 8.0 + 0.01), 2.0) > 0.5; // the female's own skin (MakeHuman's mesh)
   vec3 nMale = n;
   // female shape offset and normal
   vec3 fem = vec3(0.0), femN = n;
@@ -150,17 +164,20 @@ void anatomyVertex(out vec3 outPos, inout vec3 n, out float cull) {
   // female body, whose nipples are separate parts) and the female cleft and labia
   vCavity = 0.0;
   if (skin && !femSpace && nearSkinFeature(p)) {
-    float flatten = max(uPG, uFemale);
+    float flatten = nativeSkin ? uPG : max(uPG, uFemale); // (the female skin's own low nipples stay, under the modelled ones, except in the doll modes)
     vec3 q = flatten > 0.0 ? dollFlatten(p, flatten) : p;
-    q += vulvaDisp(p) * uFemale;
-    vCavity = uFemale * vulvaCavity(p);
+    // (on the female's own skin only where it faces the cleft: pushed along the steep inner thighs
+    // the shaping would shear them into creases)
+    float vk = nativeSkin ? smoothstep(0.25, 0.65, dot(nMale, vulvaRadial(p))) : 1.0;
+    q += vulvaDisp(p) * uFemale * vk;
+    vCavity = uFemale * vulvaCavity(p) * vk;
     if (flatten > 0.0 || uFemale > 0.0) {
       vec3 t1 = normalize(abs(n.y) < 0.9 ? cross(n, vec3(0.0, 1.0, 0.0)) : cross(n, vec3(1.0, 0.0, 0.0)));
       vec3 t2 = cross(n, t1);
       float e = 0.001;
       vec3 pa = p + t1 * e, pb = p + t2 * e;
-      vec3 qa = (flatten > 0.0 ? dollFlatten(pa, flatten) : pa) + vulvaDisp(pa) * uFemale;
-      vec3 qb = (flatten > 0.0 ? dollFlatten(pb, flatten) : pb) + vulvaDisp(pb) * uFemale;
+      vec3 qa = (flatten > 0.0 ? dollFlatten(pa, flatten) : pa) + vulvaDisp(pa) * uFemale * vk;
+      vec3 qb = (flatten > 0.0 ? dollFlatten(pb, flatten) : pb) + vulvaDisp(pb) * uFemale * vk;
       vec3 nn = cross(qa - q, qb - q);
       if (dot(nn, nn) > 1e-14) { nn = normalize(nn); femN = normalize(femN + (nn - nMale)); n = nn; }
     }
@@ -245,6 +262,7 @@ varying float vFlags;
 varying float vPid;
 varying float vState;
 varying float vCavity;
+varying float vSexVis;
 
 vec4 nz(vec3 p) { return texture(uNoise, p); }               // rgb = gradient (0..1), a = value
 vec3 nzGrad(vec3 p) { return nz(p).rgb * 2.0 - 1.0; }

@@ -39,6 +39,8 @@ float vulvaCavity(vec3 p) {
   float b = p.x / 0.0034;
   return exp(-b * b) * along * smoothstep(0.03, 0.04, r) * (1.0 - smoothstep(0.1, 0.12, r)) * (1.0 - uPG);
 }
+// the direction the shaping pushes at p (away from its axis), for weighting it by how the skin faces
+vec3 vulvaRadial(vec3 p) { return normalize(vec3(0.0, p.y - ${VULVA.yc.toFixed(4)}, p.z - ${VULVA.zc.toFixed(4)}) + vec3(0.0, 1e-6, 0.0)); }
 vec3 vulvaDisp(vec3 p) {
   float dy = p.y - ${VULVA.yc.toFixed(4)}, dz = p.z - ${VULVA.zc.toFixed(4)}, r = length(vec2(dy, dz));
   if (r < 0.03 || r > 0.12 || abs(p.x) > 0.05) return vec3(0.0);
