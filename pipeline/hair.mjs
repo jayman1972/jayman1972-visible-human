@@ -16,7 +16,7 @@ function rng32(seed) { let a = seed >>> 0; return () => { a = (a + 0x6d2b79f5) >
 
 // Hairline: the lowest hair (height above the eyes) by angle around the head, 0 = front, 180 = back
 export const HAIRLINE = {
-  female: [[0, 0.07], [25, 0.065], [45, 0.05], [62, 0.026], [74, 0.004], [84, 0.002], [94, 0.03], [108, 0.0], [125, -0.04], [150, -0.072], [180, -0.085]],
+  female: [[0, 0.064], [25, 0.06], [45, 0.045], [62, 0.022], [74, 0.002], [84, 0.0], [94, 0.03], [108, 0.0], [125, -0.04], [150, -0.072], [180, -0.085]],
   male: [[0, 0.077], [22, 0.073], [38, 0.063], [55, 0.036], [70, -0.008], [82, -0.018], [92, 0.028], [108, -0.004], [125, -0.044], [150, -0.074], [180, -0.084]],
 };
 function lineAt(tab, deg) { for (let i = 1; i < tab.length; i++) if (deg <= tab[i][0]) { const [a0, h0] = tab[i - 1], [a1, h1] = tab[i]; const t = (deg - a0) / (a1 - a0); return h0 + (h1 - h0) * t; } return tab[tab.length - 1][1]; }
@@ -104,12 +104,38 @@ export function buildHair({ skin, face, eyes, lashCards = null }) {
     // ---- scalp hair
     const strands = [];
     const N = F ? 3200 : 6000, NP = F ? 18 : 5; // impression of hair, not individual hairs: wide strands over a hair-coloured scalp
-    for (let k = 0; k < N; k++) {
-      const T = pick(), r = pointOn(T);
+    // her curtain fringe: the first few centimetres behind the front hairline fall forward over the
+    // forehead, parted in the middle and sweeping out to the temples (short in the middle, down to
+    // the cheekbones at the sides), framing the face
+    const fringeZone = (p) => { const rl = sub(p, hc), deg = Math.atan2(Math.abs(rl[0]), rl[2]) * 180 / Math.PI; return deg < 40 && p[1] - o[1] < lineAt(HAIRLINE.female, deg) + 0.028; };
+    const NFX = F ? 700 : 0; // (extra strands for the fringe, on top of its share of the scalp)
+    for (let k = 0; k < N + NFX; k++) {
+      let T = pick(), r = pointOn(T);
+      if (k >= N) { for (let tries = 0; tries < 60 && !fringeZone(r.p); tries++) { T = pick(); r = pointOn(T); } if (!fringeZone(r.p)) continue; }
       const rel = sub(r.p, hc), ax = Math.abs(rel[0]), sx = Math.sign(rel[0]) || 1;
       const yr = r.p[1] - o[1];
       let pl, layer;
-      if (F) {
+      if (F && fringeZone(r.p) && (k >= N || rnd() < 0.85)) {
+        const h0 = 0.0012 + rnd() * 0.0035; layer = 0.75 + 0.25 * rnd();
+        // (short over the forehead; at the sides layered face-framing lengths, cheekbone to below the chin)
+        const jit = (rnd() - 0.5) * 0.006, drop = 0.06 + 0.1 * rnd() * rnd(), endY = (x) => o[1] + 0.046 - (0.046 + drop) * sstep(0.014, 0.066, Math.abs(x - o[0])) + jit;
+        let dir = tangent([sx * 0.32, -1, 0.4], r.n);
+        let p = add(r.p, r.n, 0.0006); pl = [p];
+        let arc = 0;
+        for (let i = 0; i < 80; i++) {
+          const seg = 0.006;
+          let q = add(p, dir, seg); arc += seg;
+          const hmin = 0.0006 + (h0 - 0.0006) * sstep(0, 0.02, arc), c = body(q) || body(q, 5);
+          if (c && c.sd < hmin) q = add(q, c.n, hmin - c.sd);
+          else if (c && c.sd > hmin + 0.003 && q[1] > o[1] - 0.005) q = add(q, c.n, -(c.sd - hmin - 0.003) * 0.8); // (below the cheekbones it hangs free)
+          const nd = norm(sub(q, p)), axq = Math.abs(q[0] - o[0]);
+          // out toward the temple first, then down beside the face, a little back
+          const out = 0.22 * (1 - sstep(0.045, 0.065, axq));
+          dir = norm(add(nd, [Math.sign(q[0] - o[0] || sx) * (out + 0.04 * sstep(0.05, 0.07, axq)), -0.16 - 0.3 * sstep(0.04, 0.065, axq), -0.1 * sstep(0.05, 0.075, axq)]));
+          p = q; pl.push(p);
+          if (p[1] < endY(p[0])) break;
+        }
+      } else if (F) {
         // flow: away from the centre parting, down the sides, swept back from the face
         // the parting runs from the hairline to the crown; behind the crown the hair falls straight down
         const front = sstep(-0.075, -0.035, rel[2]) * sstep(0.02, 0.06, yr);

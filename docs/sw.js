@@ -1,7 +1,7 @@
 // Service worker: makes the app installable and usable offline.
 // App shell and the base model are cached at install; full-detail packs are cached
 // the first time they are viewed. A new build gets a new version and replaces all the caches.
-const VERSION = '875dff5628a1';
+const VERSION = '4a4bc656a7af';
 const SHELL = `vh-shell-${VERSION}`;
 const DETAIL = `vh-detail-${VERSION}`; // full-detail packs change with the data, so each build starts afresh
 const FONTS = 'vh-fonts-v1';
