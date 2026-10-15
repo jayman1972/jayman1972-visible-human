@@ -89,7 +89,8 @@ export function makeSharedUniforms() {
     uHair: { value: 0 }, uHairO: { value: new THREE.Vector3() }, uHairHc: { value: new THREE.Vector3() },
     uHairLineF: { value: Array.from({ length: 11 }, () => new THREE.Vector2()) }, uHairLineM: { value: Array.from({ length: 11 }, () => new THREE.Vector2()) },
     uHairColF: { value: new THREE.Color() }, uHairColM: { value: new THREE.Color() },
-    uFemField: { value: null }, uFemMin: { value: new THREE.Vector3() }, uFemInv: { value: new THREE.Vector3() }, uAreola: { value: [new THREE.Vector4(), new THREE.Vector4()] },
+    uFemField: { value: null }, uFemMin: { value: new THREE.Vector3() }, uFemInv: { value: new THREE.Vector3() },
+    uObese: { value: 0 }, uObField: { value: null }, uObMin: { value: new THREE.Vector3() }, uObInv: { value: new THREE.Vector3() }, uObATex: { value: null }, uObBTex: { value: null }, uObGen: { value: new THREE.Vector3() }, uAreola: { value: [new THREE.Vector4(), new THREE.Vector4()] },
     uKeyDir: { value: new THREE.Vector3(0, 0, 1) }, uDetail: { value: 1 },
     ...tissueUniforms(THREE),
   };
@@ -104,7 +105,7 @@ export function makeAnatomyMaterial(shared, mode, { isSkin = false, lodPass = 0 
     side: THREE.FrontSide,
   });
   mat.userData.mode = mode;
-  mat.defines = isSkin ? { FEM_ATTR: '', FEM_ABS: '' } : { FEM_ATTR: '' }; // per-vertex female offsets (skin) / corrections (others)
+  mat.defines = isSkin ? { FEM_ATTR: '', FEM_ABS: '', OB_ATTR: '' } : { FEM_ATTR: '' }; // per-vertex female offsets (skin) / corrections (others)
   const local = { uIsSkin: { value: isSkin ? 1 : 0 }, uLodPass: { value: lodPass }, uSkinSolid: { value: 0 } };
   mat.userData.local = local;
   mat.onBeforeCompile = (shader) => {
@@ -208,8 +209,18 @@ export function makeAnatomyMaterial(shared, mode, { isSkin = false, lodPass = 0 
           float a = smoothstep(r, r * 0.78, d) * (0.72 + 0.12 * (nz(vFemPos * 900.0).a - 0.5) * DETAIL(900.0));
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.40, 0.21, 0.17), a);
         }
+        if (abs(vObTint) > 0.001) { // Blimp mode: visceral fat (yellow), fatty liver (tan)
+          float c = nz(vMalePos * 180.0).a;
+          vec3 tcol = vObTint > 0.0 ? mix(vec3(0.93, 0.74, 0.34), vec3(0.99, 0.88, 0.55), c) : mix(vec3(0.74, 0.55, 0.32), vec3(0.88, 0.72, 0.44), c);
+          diffuseColor.rgb = mix(diffuseColor.rgb, pow(tcol, vec3(2.2)), abs(vObTint));
+        }
         if (capFace) {
           diffuseColor.rgb *= 0.86;
+          if (uIsSkin > 0.5 && uObese > 0.0) { // Blimp mode: the thick layer under the skin is fat
+            float c = nz(mp * 140.0).a;
+            vec3 fat = mix(vec3(0.88, 0.68, 0.30), vec3(0.98, 0.87, 0.54), smoothstep(0.3, 0.7, c));
+            diffuseColor.rgb = mix(diffuseColor.rgb, pow(fat, vec3(2.2)), uObese);
+          }
           if (tcls == 1) { float c = nz(mp * 260.0).a; diffuseColor.rgb = mix(vec3(0.62, 0.36, 0.3), diffuseColor.rgb * 1.05, smoothstep(0.35, 0.6, c)); }
           if (tcls == 4 || tcls == 18) { float c = nz(mp * 420.0).a; diffuseColor.rgb *= mix(0.8, 1.08, smoothstep(0.4, 0.7, c)); }
           if (tcls == 12) { float c = nz(mp * 300.0).a; diffuseColor.rgb *= mix(0.65, 1.1, smoothstep(0.3, 0.6, c)); }
@@ -325,7 +336,7 @@ export function makeAnatomyMaterial(shared, mode, { isSkin = false, lodPass = 0 
 
 export function makePickMaterial(shared, lodPass, isSkin = false) {
   return new THREE.ShaderMaterial({
-    defines: isSkin ? { FEM_ATTR: '', FEM_ABS: '' } : { FEM_ATTR: '' },
+    defines: isSkin ? { FEM_ATTR: '', FEM_ABS: '', OB_ATTR: '' } : { FEM_ATTR: '' },
     uniforms: { ...shared, uIsSkin: { value: isSkin ? 1 : 0 }, uLodPass: { value: lodPass } },
     vertexShader: VERT_PARS + /* glsl */ `
       flat varying int vId;

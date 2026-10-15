@@ -368,6 +368,7 @@ body.has-panel .dock * { pointer-events: none !important; }
 .pg-toggle[aria-pressed="true"] .sw { background: var(--plate); }
 .pg-toggle[aria-pressed="true"] .sw::after { transform: translateX(11px); background: var(--plate-ink); }
 .pg-toggle:focus-visible, #sex-toggle button:focus-visible { outline: 2px solid var(--xray); outline-offset: 2px; }
+@media (max-width: 480px) { .pg-toggle .m { display: none; } .brand-row { gap: 8px; } }
 #hd { font-family: var(--f-ui); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--xray); border: 1px solid rgba(111,227,242,.4); padding: 2px 7px; border-radius: 6px; }
 #hd.loading { animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: 0.4; } }
@@ -385,6 +386,9 @@ body.has-panel #btn-unhide { display: none !important; }
 .panel-head .sub { font-family: var(--f-ui); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
 .panel-body { overflow-y: auto; padding: 0 16px calc(var(--safe-b) + 14px); -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 /* motion */
+.blimp-list { margin: 0 0 10px; padding: 0; list-style: none; display: grid; gap: 9px; font-size: 14px; line-height: 1.45; color: var(--fg); }
+.blimp-list b { font-weight: 600; }
+.blimp-note { margin: 0; font-size: 12px; line-height: 1.4; color: var(--muted); }
 #motion-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; margin-bottom: 14px; }
 .motion-row { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; text-align: left; padding: 10px 12px; border-radius: 14px; border: 1px solid var(--line); background: rgba(150,196,214,.06); cursor: pointer; }
 .motion-row .sw { width: 30px; height: 18px; border-radius: 9px; background: rgba(150,196,214,.18); position: relative; margin-top: 2px; transition: background .2s; }
@@ -457,10 +461,10 @@ input[type="range"] { width: 100%; accent-color: var(--xray); height: 28px; }
   }
   .bottom-panel.open { transform: none; }
   .bottom-panel.expanded { max-height: calc(100vh - var(--top-space, 140px) - var(--dock-space, 120px) - 8px); }
-  #motion.bottom-panel, #tours.bottom-panel, #section.bottom-panel {
+  #motion.bottom-panel, #tours.bottom-panel, #section.bottom-panel, #blimp.bottom-panel {
     left: auto; right: 76px; width: clamp(300px, 28vw, 380px); transform: translateX(calc(100% + 110px));
   }
-  #motion.bottom-panel.open, #tours.bottom-panel.open, #section.bottom-panel.open { transform: none; }
+  #motion.bottom-panel.open, #tours.bottom-panel.open, #section.bottom-panel.open, #blimp.bottom-panel.open { transform: none; }
   .panel-body { padding-bottom: 16px; }
   .panel-handle { display: none; }
   .sheet-head { padding-top: 16px; }
@@ -544,7 +548,8 @@ input[type="range"] { width: 100%; accent-color: var(--xray); height: 28px; }
         <button type="button" id="sex-m" aria-pressed="true">Male</button>
         <button type="button" id="sex-f" aria-pressed="false">Female</button>
       </div>
-      <button type="button" id="pg-toggle" class="pg-toggle" aria-pressed="false"><span class="sw" aria-hidden="true"></span><span class="lbl">Ken mode</span></button>
+      <button type="button" id="pg-toggle" class="pg-toggle" aria-pressed="false"><span class="sw" aria-hidden="true"></span><span class="lbl">Ken <span class="m">mode</span></span></button>
+      <button type="button" id="blimp-toggle" class="pg-toggle" aria-pressed="false" hidden><span class="sw" aria-hidden="true"></span><span class="lbl">Blimp <span class="m">mode</span></span></button>
     </div>
   </div>
   <div class="top-actions">
@@ -628,6 +633,26 @@ input[type="range"] { width: 100%; accent-color: var(--xray); height: 28px; }
     <button type="button" id="btn-isolate" aria-pressed="false">Isolate</button>
     <button type="button" id="btn-slice">Slice</button>
     <button type="button" id="btn-hide">Hide</button>
+  </div>
+</section>
+
+<section id="blimp" class="bottom-panel" hidden aria-label="Blimp mode">
+  <div class="panel-handle" aria-hidden="true"><span></span></div>
+  <div class="panel-head">
+    <div><div class="sub">About five times the weight</div><h2>Blimp mode</h2></div>
+    <button class="icon-btn" id="blimp-close" type="button" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </div>
+  <div class="panel-body">
+    <ul class="blimp-list">
+      <li><b>Fat under the skin.</b> Most of the extra weight is a thick layer of fat between the skin and the muscles. Slice the body to see it in yellow.</li>
+      <li><b>Visceral fat.</b> The greater omentum, an apron of fat in front of the intestines, swells and pushes the belly out.</li>
+      <li><b>Fatty liver.</b> The liver grows and turns yellow-tan as fat builds up in it (fatty liver disease).</li>
+      <li><b>Heart.</b> The heart enlarges: it pumps blood through far more tissue, often against high blood pressure.</li>
+      <li><b>Breathing.</b> The swollen abdomen pushes the diaphragm up and leaves the lungs less room.</li>
+      <li><b>Bones and joints.</b> The skeleton stays the same size but carries five times the load, which wears down the knees, hips and spine.</li>
+      <li><b>Posture.</b> The arms and legs are held further apart.</li>
+    </ul>
+    <p class="blimp-note">Body shape from MakeHuman's heavy-body targets (CC0), pushed well past their usual range. An illustration, not a scan.</p>
   </div>
 </section>
 
@@ -724,6 +749,7 @@ input[type="range"] { width: 100%; accent-color: var(--xray); height: 28px; }
     <li><svg viewBox="0 0 24 24"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg><span><b>Motion</b> starts the heartbeat, breathing, blood flow and more, with sound.</span></li>
     <li><svg viewBox="0 0 24 24"><path d="M3.5 11.5 12 4l8.5 7.5"/><path d="M6 9.8v9.7h12V9.8"/></svg><span>Lost? <b>Restore</b> (the house button) puts everything back to the starting view.</span></li>
     <li><svg viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="8" rx="4"/><circle cx="15" cy="12" r="2.2"/></svg><span><b>Ken mode</b> and <b>Barbie mode</b> smooth over the genitals and nipples, like a doll, for a family-friendly view.</span></li>
+    <li><svg viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="8" rx="4"/><circle cx="15" cy="12" r="2.2"/></svg><span><b>Blimp mode</b> shows the male body at about five times its weight: the fat, the organs and the load on the skeleton.</span></li>
     <li id="install-tip" hidden><svg viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5"/><path d="M5 12v8h14v-8"/></svg><span><b>Install it:</b> tap <b>Share</b>, then <b>Add to Home Screen</b>. It opens full screen and works offline.</span></li>
   </ul>
   <div class="keys">

@@ -41,6 +41,16 @@ float vulvaCavity(vec3 p) {
 }
 // the direction the shaping pushes at p (away from its axis), for weighting it by how the skin faces
 vec3 vulvaRadial(vec3 p) { return normalize(vec3(0.0, p.y - ${VULVA.yc.toFixed(4)}, p.z - ${VULVA.zc.toFixed(4)}) + vec3(0.0, 1e-6, 0.0)); }
+// Blimp mode: visceral fat expands the abdomen (forward and out, from the spine) between the pelvic
+// brim and the costal margin, and pushes the diaphragm (and what sits on it) up
+vec3 blimpVisc(vec3 p) {
+  float band = smoothstep(0.86, 0.95, p.y) * (1.0 - smoothstep(1.13, 1.24, p.y));
+  float lat = 1.0 - smoothstep(0.11, 0.17, abs(p.x));
+  vec3 d = vec3(p.x * 0.15, 0.0, max(p.z + 0.03, 0.0) * 0.5) * band * lat;
+  float dy = (p.y - 1.16) / 0.07;
+  d.y += 0.022 * exp(-dy * dy) * lat;
+  return d;
+}
 vec3 vulvaDisp(vec3 p) {
   float dy = p.y - ${VULVA.yc.toFixed(4)}, dz = p.z - ${VULVA.zc.toFixed(4)}, r = length(vec2(dy, dz));
   if (r < 0.03 || r > 0.12 || abs(p.x) > 0.05) return vec3(0.0);

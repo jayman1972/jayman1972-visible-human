@@ -334,6 +334,67 @@ function limbContour(P, D, regionOfV, J, opts = {}) {
 // maps to the matching point of that mesh (the closest point on MakeHuman's male fitted onto this
 // skin, then the same spot on the female). The male skin morphs there as the body changes, and
 // everything inside the body follows these offsets into the female shape.
+// The easter egg: this body at about five times its weight. MakeHuman's heavy male (its weight and
+// fat targets pushed far past their range: belly, waist, hips, thighs, arms, neck and double chin),
+// the fat smoothed over the body (extrapolated targets get lumpy), the cranium left as it is (the
+// hair grows from it); about 4.9x the body volume. The arms and legs are held further apart, as
+// they must be at that size.
+const bothSides = (rel, w) => [[rel.replace('/*-', '/l-'), w], [rel.replace('/*-', '/r-'), w]];
+export const OBESE_MALE = (() => {
+  const k = 5.8;
+  return {
+    targets: [
+      ['macrodetails/universal-male-young-averagemuscle-maxweight.target', 5.3],
+      ['stomach/stomach-pregnant-incr.target', 0.03 * k], ['stomach/stomach-tone-decr.target', 0.2 * k],
+      ['measure/measure-waist-circ-incr.target', 1.6 * k], ['measure/measure-hips-circ-incr.target', 1.25 * k],
+      ['measure/measure-thigh-circ-incr.target', 1.3 * k], ['measure/measure-upperarm-circ-incr.target', 1.3 * k],
+      ['measure/measure-neck-circ-incr.target', 1.0 * k], ['measure/measure-bust-circ-incr.target', 1.0 * k], ['measure/measure-underbust-circ-incr.target', 1.0 * k],
+      ['measure/measure-calf-circ-incr.target', 0.9 * k], ['measure/measure-ankle-circ-incr.target', 0.6 * k], ['measure/measure-knee-circ-incr.target', 0.9 * k], ['measure/measure-wrist-circ-incr.target', 0.4 * k],
+      ...bothSides('armslegs/*-upperarm-fat-incr.target', 1.0 * k), ...bothSides('armslegs/*-lowerarm-fat-incr.target', 0.6 * k), ...bothSides('armslegs/*-upperleg-fat-incr.target', 1.0 * k), ...bothSides('armslegs/*-lowerleg-fat-incr.target', 0.7 * k),
+      ['neck/neck-double-incr.target', 1.5], ...bothSides('cheek/*-cheek-volume-incr.target', 2), ['buttocks/buttocks-volume-incr.target', 1.3 * k],
+    ],
+    smooth: 70, faceRaw: [5.6, 6.9], headFree: [7.1, 7.3], armAbduct: 30, legAbduct: 7,
+  };
+})();
+
+// this body's skin at five times the weight: offsets (fat and pose) and the pose alone (for what is inside)
+export function computeSkinObese(parts, fem, skinRegionOf, { rigid = () => false } = {}) {
+  let n = 0; for (const p of parts) n += p.mesh.P.length / 3;
+  const P = new Float64Array(n * 3), D = new Float64Array(n * 3), DP = new Float64Array(n * 3), tris = [];
+  let o = 0;
+  for (const p of parts) {
+    const M = p.mesh, m = M.P.length / 3;
+    for (let k = 0; k < m; k++) {
+      const q = [M.P[k * 3], M.P[k * 3 + 1], M.P[k * 3 + 2]];
+      const r = fem.T.dispAt(q, skinRegionOf(p.name, q[0])) || fem.T.dispAt(q);
+      for (let a = 0; a < 3; a++) { P[(o + k) * 3 + a] = q[a]; D[(o + k) * 3 + a] = r && r.ob ? r.ob[a] : 0; DP[(o + k) * 3 + a] = r && r.obp ? r.obp[a] : 0; }
+    }
+    for (let t = 0; t < M.I.length; t++) tris.push(M.I[t] + o);
+    p._oo = o; o += m;
+  }
+  // the genitals move as one block (MakeHuman has none: its offsets there would tear them apart)
+  const rig = parts.filter(rigid), T = [0, 0, 0]; let nt = 0;
+  for (const p of rig) for (let k = 0; k < p.mesh.P.length / 3; k++) { for (let a = 0; a < 3; a++) T[a] += D[(p._oo + k) * 3 + a]; nt++; }
+  if (nt) { for (let a = 0; a < 3; a++) T[a] /= nt; for (const p of rig) for (let k = 0; k < p.mesh.P.length / 3; k++) for (let a = 0; a < 3; a++) D[(p._oo + k) * 3 + a] = T[a]; }
+  smoothField(P, D, tris, { iters: 3, headIters: 0, log: () => {} });
+  smoothField(P, DP, tris, { iters: 3, headIters: 0, log: () => {} });
+  // normals of the heavy body, over the welded skin
+  const key = new Map(), weld = new Int32Array(n);
+  for (let i = 0; i < n; i++) { const kk = Math.round(P[i * 3] * 2e4) + ',' + Math.round(P[i * 3 + 1] * 2e4) + ',' + Math.round(P[i * 3 + 2] * 2e4); let w = key.get(kk); if (w === undefined) { w = key.size; key.set(kk, w); } weld[i] = w; }
+  const NN = new Float64Array(key.size * 3), Q = (i, a) => P[i * 3 + a] + D[i * 3 + a];
+  for (let t = 0; t < tris.length; t += 3) {
+    const a = tris[t], b = tris[t + 1], c = tris[t + 2], e1 = [Q(b, 0) - Q(a, 0), Q(b, 1) - Q(a, 1), Q(b, 2) - Q(a, 2)], e2 = [Q(c, 0) - Q(a, 0), Q(c, 1) - Q(a, 1), Q(c, 2) - Q(a, 2)];
+    const f = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+    for (const v of [a, b, c]) for (let x = 0; x < 3; x++) NN[weld[v] * 3 + x] += f[x];
+  }
+  for (const p of parts) {
+    const m = p.mesh.P.length / 3, N = new Float32Array(m * 3);
+    for (let k = 0; k < m; k++) { const w = weld[p._oo + k], l = Math.hypot(NN[w * 3], NN[w * 3 + 1], NN[w * 3 + 2]) || 1; for (let x = 0; x < 3; x++) N[k * 3 + x] = NN[w * 3 + x] / l; }
+    p.obD = Float32Array.from(D.subarray(p._oo * 3, (p._oo + m) * 3)); p.obP = Float32Array.from(DP.subarray(p._oo * 3, (p._oo + m) * 3)); p.obN = N;
+  }
+  return { genital: T };
+}
+
 export function computeSkinNative(parts, fem, skinRegionOf) {
   let n = 0; for (const p of parts) n += p.mesh.P.length / 3;
   const P = new Float64Array(n * 3), D = new Float64Array(n * 3), B = new Float32Array(n), tris = [];

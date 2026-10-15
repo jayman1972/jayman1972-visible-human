@@ -74,6 +74,21 @@ attribute vec2 aFemN;   // female normal (octahedral)
 uniform highp sampler3D uFemField;
 uniform vec3 uFemMin;
 uniform vec3 uFemInv;
+// Blimp mode (the male at about five times his weight): the skin has exact per-vertex offsets and
+// normals; everything inside follows the pose (a 3D field: arms and legs held apart), organs grow
+// about their organ's centre, and the abdomen and diaphragm move (analytic, warp.js)
+uniform float uObese;
+uniform highp sampler3D uObField;
+uniform vec3 uObMin;
+uniform vec3 uObInv;
+uniform highp sampler2D uObATex; // organ centre, how much it moves with the abdomen
+uniform highp sampler2D uObBTex; // growth (x, y, z), fat colour (+ fat, - fatty liver)
+uniform vec3 uObGen;             // the external genitals' offset (they move as one block with their skin)
+#ifdef OB_ATTR
+attribute vec3 aObD;   // skin: offset to the heavy body (0.1 mm units)
+attribute vec2 aObN;   // its normal (octahedral)
+#endif
+varying float vObTint;
 varying vec3 vFemPos;   // rest position in the female body (areola placement)
 ${WARP_GLSL}
 varying vec3 vMalePos;
@@ -185,6 +200,22 @@ void anatomyVertex(out vec3 outPos, inout vec3 n, out float cull) {
   }
   if (uFemale > 0.0) n = normalize(mix(n, femN, uFemale));
   vec3 pw = p + (fem + fd.xyz) * uFemale;
+  // Blimp mode
+  vec4 oa = texelFetch(uObATex, tc, 0), ob4 = texelFetch(uObBTex, tc, 0);
+  vObTint = ob4.w * uObese;
+  if (uObese > 0.0) {
+    if (skin) {
+#ifdef OB_ATTR
+      pw += aObD * 1e-4 * uObese;
+      vec3 o = vec3(aObN, 1.0 - abs(aObN.x) - abs(aObN.y));
+      if (o.z < 0.0) o.xy = (1.0 - abs(o.yx)) * vec2(o.x >= 0.0 ? 1.0 : -1.0, o.y >= 0.0 ? 1.0 : -1.0);
+      n = normalize(mix(n, normalize(o), uObese));
+#endif
+    } else {
+      pw = oa.xyz + (pw - oa.xyz) * mix(vec3(1.0), ob4.xyz, uObese);
+      pw += (texture(uObField, (p0 - uObMin) * uObInv).xyz + (oa.w > 1.5 ? uObGen : blimpVisc(p0) * oa.w)) * uObese;
+    }
+  }
   outPos = pw + pd.xyz;
   vWPos = outPos;
   vFlow = aFlow; vTissue = aTissue; vAnimCode = ad.x; vAxis = xd.xyz; vRough = aRough; vFlags = xd.w; vPid = float(pid);
@@ -227,6 +258,7 @@ uniform float uGhostA;
 uniform float uSkinSolid;
 uniform float uIsSkin;
 uniform float uFemale;
+uniform float uObese;
 uniform float uTime;
 uniform vec4 uHeart;
 uniform vec4 uBreath;
@@ -263,6 +295,7 @@ varying float vPid;
 varying float vState;
 varying float vCavity;
 varying float vSexVis;
+varying float vObTint;
 
 vec4 nz(vec3 p) { return texture(uNoise, p); }               // rgb = gradient (0..1), a = value
 vec3 nzGrad(vec3 p) { return nz(p).rgb * 2.0 - 1.0; }

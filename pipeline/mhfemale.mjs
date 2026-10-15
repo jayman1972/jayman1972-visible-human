@@ -101,7 +101,7 @@ function closestOnTri(p, a, b, c) {
  * opts: female age, breast size/firmness, weight, height ratio
  */
 export function makeFemaleTransfer(our, opts = {}) {
-  const { age = 30, breastSize = 0.68, breastFirmness = 0.42, weight = 0.56, muscle = 0.5, proportions = 0.5, heightRatio = 0.94, breastFrom = null, extra = [], log = console.log } = opts;
+  const { age = 30, breastSize = 0.68, breastFirmness = 0.42, weight = 0.56, muscle = 0.5, proportions = 0.5, heightRatio = 0.94, breastFrom = null, extra = [], obese = null, log = console.log } = opts;
   const { V, groups } = loadObj(BASE);
   const quads = groups.body;
   const bodySet = new Set(quads.flat());
@@ -136,15 +136,28 @@ export function makeFemaleTransfer(our, opts = {}) {
   F = applyTargets(F, [['macrodetails/height/female-young-averagemuscle-averageweight-maxheight.target', hw]]);
   log(`makehuman: male ${hM.toFixed(2)} dm, female ${heightOf(F).toFixed(2)} dm (height target ${hw.toFixed(2)}), age ${age}, breast ${breastSize}/${breastFirmness}, muscle ${muscle}, weight ${weight}, proportions ${proportions}`);
 
+  // the heavy male (the easter egg): fat smoothed over the body mesh, the cranium kept as it is
+  let Ob = null;
+  if (obese) {
+    const Mt = applyTargets(M, obese.targets), adj = new Map();
+    for (const q of quads) for (let k = 0; k < q.length; k++) { const a = q[k], b = q[(k + 1) % q.length]; (adj.get(a) || adj.set(a, new Set()).get(a)).add(b); (adj.get(b) || adj.set(b, new Set()).get(b)).add(a); }
+    let DD = M.map((p, i) => sub(Mt[i], p));
+    for (let it = 0; it < obese.smooth; it++) { const D2 = DD.map((d) => d.slice()); for (const [i, nb] of adj) { let a = [0, 0, 0]; for (const j of nb) a = add(a, DD[j]); D2[i] = add(mul(DD[i], 0.5), mul(a, 0.5 / nb.size)); } DD = D2; }
+    // (the face and under the chin keep their own detail: fuller cheeks, a double chin)
+    const [f0, f1] = obese.faceRaw, [h0, h1] = obese.headFree, ss = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+    Ob = M.map((p, i) => { const r = ss(f0, f1, p[1]), k = 1 - ss(h0, h1, p[1]); return add(p, mul(add(mul(DD[i], 1 - r), mul(sub(Mt[i], p), r)), k)); });
+  }
   // similarity transform male -> our space: scale by height, feet on the floor, centred, depth by hips+shoulders
   const s = our.height / hM;
   let minY = Infinity; for (const i of ids) minY = Math.min(minY, M[i][1]);
   const toOur = (p) => [p[0] * s, (p[1] - minY) * s, p[2] * s];
-  let Mo = M.map(toOur), Fo = F.map(toOur);
+  let Mo = M.map(toOur), Fo = F.map(toOur), Obo = Ob ? Ob.map(toOur) : null, ObPo = Ob ? M.map(toOur) : null; // (ObPo: his pose alone)
   const jMid = (P) => mul(add(add(joint(P, 'upperleg01.L____head'), joint(P, 'upperleg01.R____head')), add(joint(P, 'upperarm01.L____head'), joint(P, 'upperarm01.R____head'))), 0.25);
   const ourMid = mul(add(add(our.joints.hip, [-our.joints.hip[0], our.joints.hip[1], our.joints.hip[2]]), add(our.joints.shoulder, [-our.joints.shoulder[0], our.joints.shoulder[1], our.joints.shoulder[2]])), 0.25);
   const dz = ourMid[2] - jMid(Mo)[2];
   Mo = Mo.map((p) => [p[0], p[1], p[2] + dz]); Fo = Fo.map((p) => [p[0], p[1], p[2] + dz]);
+  if (Obo) { Obo = Obo.map((p) => [p[0], p[1], p[2] + dz]); ObPo = ObPo.map((p) => [p[0], p[1], p[2] + dz]); }
+  const heavy = () => (Obo ? [Obo, ObPo] : []);
 
   // pose arms and legs to our posture (same rotations for both shapes, each about its own joints)
   const poseLimb = (P, Q, side, wUp, wLow, jA, jB, jC, oA, oB, oC) => {
@@ -153,7 +166,7 @@ export function makeFemaleTransfer(our, opts = {}) {
     const R1 = rotBetween(sub(B, A), sub(mir(oB), mir(oA)));
     const B1 = add(A, mv(R1, sub(B, A))), C1 = add(A, mv(R1, sub(joint(P, jC), A)));
     const R2 = rotBetween(sub(C1, B1), sub(mir(oC), mir(oB)));
-    for (const X of [P, Q]) {
+    for (const X of [P, Q, ...heavy()]) {
       const a = joint(X, jA), b = joint(X, jB), b1 = add(a, mv(R1, sub(b, a)));
       for (let i = 0; i < X.length; i++) {
         const w1 = wUp[side][i]; if (w1 <= 0) continue;
@@ -186,7 +199,7 @@ export function makeFemaleTransfer(our, opts = {}) {
     const vo = flat(sub(mir(our.joints.thumb), mir(our.joints.little)));
     const ang = Math.atan2(dot(cross(vm, vo), ax), dot(vm, vo));
     twist[side] = ang;
-    for (const X of [Mo, Fo]) {
+    for (const X of [Mo, Fo, ...heavy()]) {
       const e = joint(X, `lowerarm01.${side}____head`), k = norm(sub(joint(X, `wrist.${side}____head`), e));
       for (let i = 0; i < X.length; i++) { const w = Math.min(1, wHandT[side][i] + 0.6 * wLow2[side][i]); if (w <= 0) continue; X[i] = add(e, mv(rotAxis(k, ang * w), sub(X[i], e))); }
     }
@@ -206,7 +219,7 @@ export function makeFemaleTransfer(our, opts = {}) {
         const h = joint(Mo, `${b}.${side}____head`), t = joint(Mo, `${b}.${side}____tail`);
         const R = rotBetween(sub(t, h), sub(mir(tgt[1]), mir(tgt[0])));
         worst = Math.max(worst, Math.acos(Math.max(-1, Math.min(1, dot(norm(sub(t, h)), norm(sub(mir(tgt[1]), mir(tgt[0]))))))));
-        for (const X of [Mo, Fo]) {
+        for (const X of [Mo, Fo, ...heavy()]) {
           const hx = joint(X, `${b}.${side}____head`);
           for (let k = 0; k < X.length; k++) { if (w[k] <= 0) continue; X[k] = add(X[k], mul(sub(add(hx, mv(R, sub(X[k], hx))), X[k]), Math.min(1, w[k]))); }
         }
@@ -214,7 +227,21 @@ export function makeFemaleTransfer(our, opts = {}) {
     }
     log(`  fingers posed bone by bone (largest turn ${(worst * 180 / Math.PI).toFixed(0)} deg)`);
   }
+  // the heavy male holds his arms and legs further apart (both his shapes: with the fat, and the pose alone)
+  if (Obo) {
+    const rotZ = (a) => [[Math.cos(a), -Math.sin(a), 0], [Math.sin(a), Math.cos(a), 0], [0, 0, 1]];
+    for (const side of ['L', 'R']) {
+      const sg = side === 'L' ? 1 : -1;
+      for (const X of [Obo, ObPo]) {
+        for (const [jn, W, deg] of [[`upperarm01.${side}____head`, wArm[side], obese.armAbduct], [`upperleg01.${side}____head`, wLeg[side], obese.legAbduct]]) {
+          const c = joint(X, jn), R = rotZ(sg * deg * Math.PI / 180);
+          for (let i = 0; i < X.length; i++) { const w = Math.min(1, W[i]); if (w <= 0) continue; X[i] = add(X[i], mul(sub(add(c, mv(R, sub(X[i], c))), X[i]), w)); }
+        }
+      }
+    }
+  }
   const D = Mo.map((p, i) => sub(Fo[i], p)); // female - male, in our space and pose
+  const DOB = Obo ? Mo.map((p, i) => sub(Obo[i], p)) : null, DOP = Obo ? Mo.map((p, i) => sub(ObPo[i], p)) : null;
 
   // MakeHuman vertex regions and normals
   const reg = new Uint8Array(V.length), reg2 = new Uint8Array(V.length).fill(255);
@@ -275,7 +302,8 @@ export function makeFemaleTransfer(our, opts = {}) {
     }
     if (!best) return null;
     const [t, u, v, w] = best;
-    return { d: add(add(mul(D[t[0]], u), mul(D[t[1]], v)), mul(D[t[2]], w)), nat: add(add(mul(Fo[t[0]], u), mul(Fo[t[1]], v)), mul(Fo[t[2]], w)), breast: wBreast[t[0]] * u + wBreast[t[1]] * v + wBreast[t[2]] * w, dist: bd };
+    const at = (A) => add(add(mul(A[t[0]], u), mul(A[t[1]], v)), mul(A[t[2]], w));
+    return { d: at(D), nat: at(Fo), breast: wBreast[t[0]] * u + wBreast[t[1]] * v + wBreast[t[2]] * w, dist: bd, ob: DOB ? at(DOB) : null, obp: DOP ? at(DOP) : null };
   }
   // native: MakeHuman's own female mesh, posed and scaled into this body's space (with its groups)
   // her hand bones (head, tail) as posed, for mapping the hand's anatomy bone by bone

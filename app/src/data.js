@@ -93,6 +93,14 @@ export async function decodeGeometry(raw, entry) {
     attr('aFemD', fd, 3, false);
     if (entry.femAbs) attr('aFemN', fn, 2, true);
   }
+  if (entry.obBytes) { // Blimp mode (skin): offset to the heavy body (int16, 0.1 mm) and its normal (oct)
+    const os = 8, ob = new Uint8Array(vCount * os), off = vBytes + iBytes + (entry.femBytes || 0);
+    MeshoptDecoder.decodeVertexBuffer(ob, vCount, os, raw.subarray(off, off + entry.obBytes));
+    const odv = new DataView(ob.buffer), od = new Int16Array(vCount * 3), on = new Int8Array(vCount * 2);
+    for (let i = 0; i < vCount; i++) { const o = i * os; od[i * 3] = odv.getInt16(o, true); od[i * 3 + 1] = odv.getInt16(o + 2, true); od[i * 3 + 2] = odv.getInt16(o + 4, true); on[i * 2] = odv.getInt8(o + 6); on[i * 2 + 1] = odv.getInt8(o + 7); }
+    attr('aObD', od, 3, false);
+    attr('aObN', on, 2, true);
+  }
   const index = new THREE.BufferAttribute(ib, 1); index.onUpload(free);
   geo.setIndex(index);
   geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0.9, 0), 3);

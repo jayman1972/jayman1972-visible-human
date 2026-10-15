@@ -79,7 +79,7 @@ let partState, userHidden, defaultHidden;
 let selSet = new Set();
 const groupIndex = new Map();
 const state = {
-  t: 0, tShown: -1, tGoal: null, vel: 0, anim: null, selected: -1, selGroup: null, isolated: false, skinMode: 'clear', pg: false, pgAnim: null,
+  t: 0, tShown: -1, tGoal: null, vel: 0, anim: null, selected: -1, selGroup: null, isolated: false, skinMode: 'clear', pg: false, pgAnim: null, blimp: false, oT: 0, oAnim: null,
   spin: false, needsRender: true, camAnim: null,
   female: 0, fT: 0, fAnim: null,
   clip: { on: false, scope: 'part', axis: 'sagittal', pos: 0, flip: false },
@@ -278,6 +278,8 @@ function sceneBounds(t) {
     else if (sf > 0) { _lb.copy(_bb).union(_bs); _bb.min.lerp(_lb.min, sf); _bb.max.lerp(_lb.max, sf); }
   }
   if (_bb.isEmpty()) _bb.set(new THREE.Vector3(-0.35, 0, -0.15), new THREE.Vector3(0.35, 1.75, 0.15));
+  // Blimp mode frames the heavy body (its arms and legs held apart reach beyond his usual extent)
+  if (state.blimp && manifest.blimp) { const b = manifest.blimp.bounds; _bb.expandByPoint(_lb.min.set(...b[0])); _bb.expandByPoint(_lb.max.set(...b[1])); }
   return _bb;
 }
 const view = { w: 1, h: 1, top: 0, bottom: 0, left: 0, right: 0, fullW: 1, fullH: 1, ox: 0, oy: 0 };
@@ -347,7 +349,7 @@ function fitDistanceRaw(t) {
 // fading would otherwise zoom out and back in), and the centre height follows the bounds.
 const NF = 65, fitTable = { key: '', d: new Float64Array(NF), y: new Float64Array(NF) };
 function fitKey() {
-  return [LAYERS.map((L) => (layerOn(L.id) ? 1 : 0)).join(''), state.skinMode, state.fT.toFixed(3), view.w, view.h, view.top, view.baseBottom ?? view.bottom, view.left, view.right, skinFade(0.5)].join('|');
+  return [LAYERS.map((L) => (layerOn(L.id) ? 1 : 0)).join(''), state.skinMode, state.fT.toFixed(3), state.blimp ? 'blimp' : '', view.w, view.h, view.top, view.baseBottom ?? view.bottom, view.left, view.right, skinFade(0.5)].join('|');
 }
 function ensureFitTable() {
   const key = fitKey();
@@ -547,13 +549,14 @@ function setSex(female) {
   const target = female ? 1 : 0;
   if (state.female === target && !state.fAnim) return;
   state.female = target;
+  if (female && state.blimp) setBlimp(false, { quiet: true, keepCamera: true });
   state.fAnim = { from: state.fT, to: target, t0: performance.now(), dur: 1400 };
   // drop selections that don't exist in the new body
   if ([...selSet].some((i) => !sexOk(parts[i]))) clearSelection();
   $('#sex-m').setAttribute('aria-pressed', female ? 'false' : 'true');
   $('#sex-f').setAttribute('aria-pressed', female ? 'true' : 'false');
   $('#sex-toggle').dataset.sex = female ? 'f' : 'm';
-  syncPGButton();
+  syncPGButton(); syncBlimpButton();
   sound.morph();
   if (searchEl && !searchEl.hidden) renderSearch(searchInput.value);
 }
@@ -564,7 +567,7 @@ function pgName() { return state.female >= 0.5 ? 'Barbie mode' : 'Ken mode'; }
 function syncPGButton() {
   const b = $('#pg-toggle'); if (!b) return;
   b.setAttribute('aria-pressed', state.pg ? 'true' : 'false');
-  b.querySelector('.lbl').textContent = pgName();
+  b.querySelector('.lbl').innerHTML = `${pgName().replace(/ mode$/, '')} <span class="m">mode</span>`;
   b.title = state.pg ? `${pgName()} is on: genitals are smoothed over, like a doll` : `Turn on ${pgName()}: a family-friendly view with the genitals smoothed over`;
 }
 function setPG(on, { quiet = false } = {}) {
@@ -580,6 +583,35 @@ function setPG(on, { quiet = false } = {}) {
   if (!quiet) { sound.toggle(on); showToast(on ? `${pgName()} on: the genitals are smoothed over, like a doll.` : `${pgName()} off: full anatomy.`); }
 }
 $('#pg-toggle').addEventListener('click', () => { unlockAudio(); setPG(!state.pg); });
+
+// Blimp mode: the male body at about five times its weight (fat under the skin, visceral fat, fatty
+// liver, enlarged heart, raised diaphragm; the same skeleton). Offered with the male body only.
+function syncBlimpButton() {
+  const b = $('#blimp-toggle'); if (!b) return;
+  b.hidden = !manifest || !manifest.blimp || state.female >= 0.5;
+  b.setAttribute('aria-pressed', state.blimp ? 'true' : 'false');
+  b.title = state.blimp ? 'Blimp mode is on: the male body at about five times its weight' : 'Turn on Blimp mode: the male body at about five times its weight';
+}
+function setBlimp(on, { quiet = false, keepCamera = false } = {}) {
+  on = !!on && !!manifest && !!manifest.blimp;
+  if (state.blimp === on) return;
+  state.blimp = on;
+  state.oAnim = { from: state.oT, to: on ? 1 : 0, t0: performance.now(), dur: quiet ? 700 : 1600 };
+  syncBlimpButton();
+  // the greater omentum (an apron of fat, hidden by default) is shown while it holds the visceral fat
+  const om = parts.filter((p) => p.name === 'Greater omentum');
+  for (const p of om) {
+    if (on && userHidden[p.id] && defaultHidden[p.id]) { userHidden[p.id] = 0; p.blimpShown = true; }
+    else if (!on && p.blimpShown) { userHidden[p.id] = 1; p.blimpShown = false; }
+  }
+  if (om.length) recomputeStates();
+  if (!keepCamera) refit(1300);
+  if (on) showPanel('blimp'); else hidePanel('blimp');
+  if (!quiet) { sound.toggle(on); sound.morph(); showToast(on ? 'Blimp mode on: about five times the weight.' : 'Blimp mode off.'); }
+  state.needsRender = true;
+}
+$('#blimp-toggle').addEventListener('click', () => { unlockAudio(); setBlimp(!state.blimp); });
+$('#blimp-close').addEventListener('click', () => hidePanel('blimp'));
 
 // ---------------------------------------------------------------------------
 // Cross-sections
@@ -890,7 +922,7 @@ function updateToolbar() {
 // ---------------------------------------------------------------------------
 // Bottom panels (info sheet, motion, section, tours) — one open at a time on phones
 // ---------------------------------------------------------------------------
-const RIGHT_PANELS = ['motion', 'tours', 'section'];
+const RIGHT_PANELS = ['motion', 'tours', 'section', 'blimp'];
 function showPanel(id) {
   const wide = window.innerWidth >= 820;
   document.querySelectorAll('.bottom-panel').forEach((p) => {
@@ -1607,6 +1639,12 @@ function frame(now) {
     if (k >= 1) { state.fAnim = null; refit(600); }
     state.tShown = -1; active = true;
   }
+  if (state.oAnim) {
+    const a = state.oAnim; const k = Math.min(1, (now - a.t0) / a.dur);
+    state.oT = a.from + (a.to - a.from) * ease(k); U.uObese.value = state.oT;
+    if (k >= 1) state.oAnim = null;
+    state.tShown = -1; active = true;
+  }
   if (state.pgAnim) {
     const a = state.pgAnim; const k = Math.min(1, (now - a.t0) / a.dur);
     U.uPG.value = a.from + (a.to - a.from) * ease(k);
@@ -1686,8 +1724,8 @@ async function init() {
   U.uQMin.value.set(...qmin);
   U.uQScale.value.set(qmax[0] - qmin[0], qmax[1] - qmin[1], qmax[2] - qmin[2]);
   N = manifest.parts.length;
-  parts = manifest.parts.map(([id, sys, name, side, groups, c, ext, hidden, sex, anim, pivot, axis, region, flags, fo, pg, cFem]) => ({
-    id, sys, name, side, groups: groups ? groups.split('>') : [], c: new THREE.Vector3(...c), ext, hidden, sex, anim, pivot, axis, region, flags, fo, pg: pg || 0, cFem: cFem || c, hi: false,
+  parts = manifest.parts.map(([id, sys, name, side, groups, c, ext, hidden, sex, anim, pivot, axis, region, flags, fo, pg, cFem, blimp]) => ({
+    id, sys, name, side, groups: groups ? groups.split('>') : [], c: new THREE.Vector3(...c), ext, hidden, sex, anim, pivot, axis, region, flags, fo, pg: pg || 0, cFem: cFem || c, blimp: blimp || 0, hi: false,
   }));
   for (const p of parts) {
     p.title = prettyName(p.name);
@@ -1710,6 +1748,16 @@ async function init() {
   U.uAnimTex.value = staticTexture((p, d, o) => { d[o] = p.anim; d[o + 1] = p.pivot[0]; d[o + 2] = p.pivot[1]; d[o + 3] = p.pivot[2]; });
   U.uAxisTex.value = staticTexture((p, d, o) => { d[o] = p.axis[0]; d[o + 1] = p.axis[1]; d[o + 2] = p.axis[2]; d[o + 3] = p.flags; });
   U.uFemTex.value = staticTexture((p, d, o) => { d[o] = p.fo[0]; d[o + 1] = p.fo[1]; d[o + 2] = p.fo[2]; d[o + 3] = p.sex + 4 * p.pg; });
+  // Blimp mode, per part: [organ centre (3), moves with the abdomen, growth (3), fat colour]
+  U.uObATex.value = staticTexture((p, d, o) => { const b = p.blimp; d[o] = b ? b[0] : 0; d[o + 1] = b ? b[1] : 0; d[o + 2] = b ? b[2] : 0; d[o + 3] = b ? b[3] : 0; });
+  U.uObBTex.value = staticTexture((p, d, o) => { const b = p.blimp; d[o] = b ? b[4] : 1; d[o + 1] = b ? b[5] : 1; d[o + 2] = b ? b[6] : 1; d[o + 3] = b ? b[7] : 0; });
+  if (manifest.blimp) {
+    const B = manifest.blimp;
+    U.uObMin.value.set(...B.min); U.uObInv.value.set(1 / (B.cell * B.dims[0]), 1 / (B.cell * B.dims[1]), 1 / (B.cell * B.dims[2]));
+    if (B.genital) U.uObGen.value.set(...B.genital);
+    fetchFemaleField(DATA, B).then((tex) => { U.uObField.value = tex; state.needsRender = true; }).catch((e) => console.warn('blimp field unavailable', e));
+  }
+  syncBlimpButton();
   (manifest.landmarks.areolas || []).slice(0, 2).forEach((a, i) => U.uAreola.value[i].set(...a.c, a.r));
   if (manifest.femField) {
     const F = manifest.femField;
@@ -1783,4 +1831,4 @@ function showUpdate() {
   if (ios && !standalone && !window.__VH_DATA_FORMAT__) $('#install-tip').hidden = false;
 }
 
-window.__vh = { fitDistance, sceneBounds, pickAt, renderer, setT, select, selectGroup, setLayer, setSkinMode, setSex, setPG, setMotion, openSection, closeSection, startTour, parts: () => parts, state, phys, camera, controls, resetView, groupIndex, view, U, pipeline, findGroupKey, updateDetail, detail };
+window.__vh = { fitDistance, sceneBounds, pickAt, renderer, setT, select, selectGroup, setLayer, setSkinMode, setSex, setPG, setBlimp, setMotion, openSection, closeSection, startTour, parts: () => parts, state, phys, camera, controls, resetView, groupIndex, view, U, pipeline, findGroupKey, updateDetail, detail };

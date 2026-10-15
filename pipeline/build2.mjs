@@ -12,7 +12,7 @@ import { femaleParts } from './female.mjs';
 import { VULVA, vulvaAmount } from '../app/src/warp.js';
 import { makeFemaleTransfer, smoothField, REG } from './mhfemale.mjs';
 import { faceFrame } from './face.mjs';
-import { computeSkinNative, skinRegion, FEMALE_NATIVE, NATIVE_REFINE } from './femskin.mjs';
+import { computeSkinNative, computeSkinObese, skinRegion, FEMALE_NATIVE, NATIVE_REFINE, OBESE_MALE } from './femskin.mjs';
 import { buildNativeSkin } from './mhskin.mjs';
 import { buildHair, packHair, HAIRLINE } from './hair.mjs';
 
@@ -247,17 +247,25 @@ function writePack(path, chunks, { femNormals = false } = {}) {
     const used = [];
     const I2 = new Uint32Array(I.length);
     for (let k = 0; k < I.length; k++) { let r = remap[I[k]]; if (r < 0) { r = remap[I[k]] = used.length; used.push(I[k]); } I2[k] = r; }
-    prepared.push({ mesh, used, I2, id, flow: ch.flow, femD: ch.femD, femN: ch.femN });
+    prepared.push({ mesh, used, I2, id, flow: ch.flow, femD: ch.femD, femN: ch.femN, obD: ch.obD, obN: ch.obN });
     vCount += used.length; iCount += I2.length;
   }
   const vb = new ArrayBuffer(vCount * STRIDE);
   const dv = new DataView(vb);
   const fb = hasFem ? new ArrayBuffer(vCount * FEM_STRIDE) : null, fdv = fb && new DataView(fb);
+  // Blimp mode (skin): the heavy body's offset (0.1 mm) and normal
+  const hasOb = chunks.some((c) => c.obD), obb = hasOb ? new ArrayBuffer(vCount * FEM_STRIDE) : null, odv = obb && new DataView(obb);
   const ib = new Uint32Array(iCount);
   let vo = 0, io = 0;
-  for (const { mesh, used, I2, id, flow, femD, femN } of prepared) {
+  for (const { mesh, used, I2, id, flow, femD, femN, obD, obN } of prepared) {
     for (let k = 0; k < used.length; k++) {
       const s = used[k], o = (vo + k) * STRIDE;
+      if (odv) {
+        const oo = (vo + k) * FEM_STRIDE;
+        for (let a = 0; a < 3; a++) odv.setInt16(oo + a * 2, obD ? Math.max(-32767, Math.min(32767, Math.round(obD[s * 3 + a] * 1e4))) : 0, true);
+        const [ou, ov] = obN ? octEncode(obN[s * 3], obN[s * 3 + 1], obN[s * 3 + 2]) : octEncode(mesh.N[s * 3], mesh.N[s * 3 + 1], mesh.N[s * 3 + 2]);
+        odv.setInt8(oo + 6, ou); odv.setInt8(oo + 7, ov);
+      }
       if (fdv) {
         const fo = (vo + k) * FEM_STRIDE;
         for (let a = 0; a < 3; a++) fdv.setInt16(fo + a * 2, femD ? Math.max(-32767, Math.min(32767, Math.round(femD[s * 3 + a] * 1e4))) : 0, true);
@@ -286,11 +294,12 @@ function writePack(path, chunks, { femNormals = false } = {}) {
   const encV = MeshoptEncoder.encodeVertexBuffer(new Uint8Array(vb), vCount, STRIDE);
   const encI = MeshoptEncoder.encodeIndexBuffer(new Uint8Array(ib.buffer), iCount, 4);
   const encF = fb ? MeshoptEncoder.encodeVertexBuffer(new Uint8Array(fb), vCount, FEM_STRIDE) : new Uint8Array(0);
-  const raw = new Uint8Array(encV.length + encI.length + encF.length);
-  raw.set(encV, 0); raw.set(encI, encV.length); raw.set(encF, encV.length + encI.length);
+  const encO = obb ? MeshoptEncoder.encodeVertexBuffer(new Uint8Array(obb), vCount, FEM_STRIDE) : new Uint8Array(0);
+  const raw = new Uint8Array(encV.length + encI.length + encF.length + encO.length);
+  raw.set(encV, 0); raw.set(encI, encV.length); raw.set(encF, encV.length + encI.length); raw.set(encO, encV.length + encI.length + encF.length);
   const gz = zlib.gzipSync(raw, { level: 9 });
   fs.writeFileSync(path, gz);
-  return { vCount, iCount, vBytes: encV.length, iBytes: encI.length, ...(fb ? { femBytes: encF.length, femAbs: femNormals ? 1 : 0 } : {}), bytes: gz.length };
+  return { vCount, iCount, vBytes: encV.length, iBytes: encI.length, ...(fb ? { femBytes: encF.length, femAbs: femNormals ? 1 : 0 } : {}), ...(obb ? { obBytes: encO.length } : {}), bytes: gz.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +490,45 @@ const maleSkin = () => allParts.filter((p) => p.sys === 'skin' && p.sex !== 1 &&
   }
   console.log(`skin refine: ${before} -> ${after} tris`);
 }
+// A smooth 3D offset field for everything inside the body, from offsets at skin samples
+// pts: [x, y, z, dx, dy, dz, weight] (near the skin it follows the closest skin; deeper, a smooth average)
+function skinField(pts, F) {
+  const hash = (list, cell) => { const m = new Map(); for (const q of list) { const k = Math.floor(q[0] / cell) + ',' + Math.floor(q[1] / cell) + ',' + Math.floor(q[2] / cell); (m.get(k) || m.set(k, []).get(k)).push(q); } return { m, cell }; };
+  const near = (h, c, r, fn) => { const n = Math.ceil(r / h.cell), gx = Math.floor(c[0] / h.cell), gy = Math.floor(c[1] / h.cell), gz = Math.floor(c[2] / h.cell); for (let i = -n; i <= n; i++) for (let j = -n; j <= n; j++) for (let k = -n; k <= n; k++) { const a = h.m.get((gx + i) + ',' + (gy + j) + ',' + (gz + k)); if (a) for (const q of a) fn(q); } };
+  const hNear = hash(pts, 0.02), hFar = hash(pts.filter((_, i) => i % 3 === 0), 0.04), hWide = hash(pts.filter((_, i) => i % 9 === 0), 0.09);
+  const [nx, ny, nz] = F.dims, data = new Float32Array(nx * ny * nz * 3);
+  const gauss = (h, c, sig) => { let sw = 0, sx = 0, sy = 0, sz = 0; const s2 = sig * sig; near(h, c, sig * 3, (q) => { const d2 = (q[0] - c[0]) ** 2 + (q[1] - c[1]) ** 2 + (q[2] - c[2]) ** 2; const w = Math.exp(-d2 / s2) * q[6]; sw += w; sx += w * q[3]; sy += w * q[4]; sz += w * q[5]; }); return [sw, sx, sy, sz]; };
+  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const c = [F.min[0] + (i + 0.5) * F.cell, F.min[1] + (j + 0.5) * F.cell, F.min[2] + (k + 0.5) * F.cell];
+    // near the skin: inverse-distance (4th power) over skin within 4 cm, so it follows the closest skin
+    let dmin = Infinity, nw = 0, n0 = 0, n1 = 0, n2 = 0;
+    near(hNear, c, 0.04, (q) => { const d = Math.hypot(q[0] - c[0], q[1] - c[1], q[2] - c[2]); if (d > 0.04) return; if (d < dmin) dmin = d; const w = q[6] / (d ** 4 + 1.6e-9); nw += w; n0 += w * q[3]; n1 += w * q[4]; n2 += w * q[5]; });
+    // deeper: a smooth average (opposite sides of a limb average to its overall shift)
+    let [sw, sx, sy, sz] = gauss(hFar, c, 0.04);
+    if (sw < 0.05) { const b = gauss(hWide, c, 0.1); const t = sw / 0.05; sw += b[0] * (1 - t); sx += b[1] * (1 - t); sy += b[2] * (1 - t); sz += b[3] * (1 - t); }
+    const far = sw > 1e-9 ? [sx / sw, sy / sw, sz / sw] : [0, 0, 0];
+    const t0 = nw > 0 ? Math.min(1, Math.max(0, (dmin - 0.008) / 0.03)) : 1, t = t0 * t0 * (3 - 2 * t0);
+    const o = ((k * ny + j) * nx + i) * 3;
+    for (let a = 0; a < 3; a++) data[o + a] = (nw > 0 ? [n0, n1, n2][a] / nw : 0) * (1 - t) + far[a] * t;
+  }
+  return data;
+}
+// trilinear, clamped (matches the GPU's linear filtering of the 3D texture)
+function fieldSampler(F, data) {
+  const [nx, ny] = F.dims;
+  return (p) => {
+    const f = [0, 1, 2].map((a) => Math.min(F.dims[a] - 1.0001, Math.max(0, (p[a] - F.min[a]) / F.cell - 0.5)));
+    const i0 = f.map(Math.floor), t = f.map((v, a) => v - i0[a]);
+    const out = [0, 0, 0];
+    for (let c = 0; c < 8; c++) {
+      const di = c & 1, dj = (c >> 1) & 1, dk = (c >> 2) & 1;
+      const w = (di ? t[0] : 1 - t[0]) * (dj ? t[1] : 1 - t[1]) * (dk ? t[2] : 1 - t[2]);
+      const ii = Math.min(F.dims[0] - 1, i0[0] + di), jj = Math.min(F.dims[1] - 1, i0[1] + dj), kk = Math.min(F.dims[2] - 1, i0[2] + dk);
+      const o = ((kk * ny + jj) * nx + ii) * 3; out[0] += w * data[o]; out[1] += w * data[o + 1]; out[2] += w * data[o + 2];
+    }
+    return out;
+  };
+}
 // 2) fit MakeHuman to this body
 const fem = {};
 {
@@ -520,7 +568,7 @@ const fem = {};
   // eye centres (iris centroids) for the face frame
   fem.eyes = ['R', 'L'].map((sd) => { const p = allParts.find((q) => q.sys === 'nerves' && q.name === 'Iris' && q.side === sd); const P = p.mesh.P, c = [0, 0, 0]; for (let k = 0; k < P.length; k += 3) for (let a = 0; a < 3; a++) c[a] += P[k + a] / (P.length / 3); return { c }; });
   fem.face = faceFrame(fem.eyes);
-  fem.T = makeFemaleTransfer({ joints, height: top, skin: { P, N, R } }, FEMALE_NATIVE);
+  fem.T = makeFemaleTransfer({ joints, height: top, skin: { P, N, R } }, { ...FEMALE_NATIVE, obese: OBESE_MALE });
 }
 computeSkinNative(maleSkin(), fem, skinRegion);
 // 3) smooth offset field for everything inside the body (3D grid, 2 cm)
@@ -528,38 +576,10 @@ computeSkinNative(maleSkin(), fem, skinRegion);
   const F = { min: [-0.42, -0.05, -0.21], cell: 0.015, dims: [57, 122, 28] };
   const pts = [];
   for (const p of maleSkin()) { const P = p.mesh.P; for (let k = 0; k < P.length / 3; k++) pts.push([P[k * 3], P[k * 3 + 1], P[k * 3 + 2], p.femD[k * 3], p.femD[k * 3 + 1], p.femD[k * 3 + 2], (1 - p.femB[k]) ** 2]); }
-  const hash = (list, cell) => { const m = new Map(); for (const q of list) { const k = Math.floor(q[0] / cell) + ',' + Math.floor(q[1] / cell) + ',' + Math.floor(q[2] / cell); (m.get(k) || m.set(k, []).get(k)).push(q); } return { m, cell }; };
-  const near = (h, c, r, fn) => { const n = Math.ceil(r / h.cell), gx = Math.floor(c[0] / h.cell), gy = Math.floor(c[1] / h.cell), gz = Math.floor(c[2] / h.cell); for (let i = -n; i <= n; i++) for (let j = -n; j <= n; j++) for (let k = -n; k <= n; k++) { const a = h.m.get((gx + i) + ',' + (gy + j) + ',' + (gz + k)); if (a) for (const q of a) fn(q); } };
-  const hNear = hash(pts, 0.02), hFar = hash(pts.filter((_, i) => i % 3 === 0), 0.04), hWide = hash(pts.filter((_, i) => i % 9 === 0), 0.09);
-  const [nx, ny, nz] = F.dims, data = new Float32Array(nx * ny * nz * 3);
-  const gauss = (h, c, sig) => { let sw = 0, sx = 0, sy = 0, sz = 0; const s2 = sig * sig; near(h, c, sig * 3, (q) => { const d2 = (q[0] - c[0]) ** 2 + (q[1] - c[1]) ** 2 + (q[2] - c[2]) ** 2; const w = Math.exp(-d2 / s2) * q[6]; sw += w; sx += w * q[3]; sy += w * q[4]; sz += w * q[5]; }); return [sw, sx, sy, sz]; };
-  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-    const c = [F.min[0] + (i + 0.5) * F.cell, F.min[1] + (j + 0.5) * F.cell, F.min[2] + (k + 0.5) * F.cell];
-    // near the skin: inverse-distance (4th power) over skin within 4 cm, so it follows the closest skin
-    let dmin = Infinity, nw = 0, n0 = 0, n1 = 0, n2 = 0;
-    near(hNear, c, 0.04, (q) => { const d = Math.hypot(q[0] - c[0], q[1] - c[1], q[2] - c[2]); if (d > 0.04) return; if (d < dmin) dmin = d; const w = q[6] / (d ** 4 + 1.6e-9); nw += w; n0 += w * q[3]; n1 += w * q[4]; n2 += w * q[5]; });
-    // deeper: a smooth average (opposite sides of a limb average to its overall shift)
-    let [sw, sx, sy, sz] = gauss(hFar, c, 0.04);
-    if (sw < 0.05) { const b = gauss(hWide, c, 0.1); const t = sw / 0.05; sw += b[0] * (1 - t); sx += b[1] * (1 - t); sy += b[2] * (1 - t); sz += b[3] * (1 - t); }
-    const far = sw > 1e-9 ? [sx / sw, sy / sw, sz / sw] : [0, 0, 0];
-    const t0 = nw > 0 ? Math.min(1, Math.max(0, (dmin - 0.008) / 0.03)) : 1, t = t0 * t0 * (3 - 2 * t0);
-    const o = ((k * ny + j) * nx + i) * 3;
-    for (let a = 0; a < 3; a++) data[o + a] = (nw > 0 ? [n0, n1, n2][a] / nw : 0) * (1 - t) + far[a] * t;
-  }
+  const data = skinField(pts, F);
   fem.F = F; fem.field = data;
-  fem.at = (p) => { // trilinear, clamped (matches the GPU's linear filtering of the 3D texture)
-    const f = [0, 1, 2].map((a) => Math.min(F.dims[a] - 1.0001, Math.max(0, (p[a] - F.min[a]) / F.cell - 0.5)));
-    const i0 = f.map(Math.floor), t = f.map((v, a) => v - i0[a]);
-    const out = [0, 0, 0];
-    for (let c = 0; c < 8; c++) {
-      const di = c & 1, dj = (c >> 1) & 1, dk = (c >> 2) & 1;
-      const w = (di ? t[0] : 1 - t[0]) * (dj ? t[1] : 1 - t[1]) * (dk ? t[2] : 1 - t[2]);
-      const ii = Math.min(F.dims[0] - 1, i0[0] + di), jj = Math.min(F.dims[1] - 1, i0[1] + dj), kk = Math.min(F.dims[2] - 1, i0[2] + dk);
-      const o = ((kk * ny + jj) * nx + ii) * 3; out[0] += w * data[o]; out[1] += w * data[o + 1]; out[2] += w * data[o + 2];
-    }
-    return out;
-  };
-  console.log(`female field: ${nx}x${ny}x${nz} grid (${F.cell * 100} cm) from ${pts.length} skin samples`);
+  fem.at = fieldSampler(F, data);
+  console.log(`female field: ${F.dims.join('x')} grid (${F.cell * 100} cm) from ${pts.length} skin samples`);
 }
 // 4) female-space samplers for building the breasts: skin height (front), chest muscle height,
 //    and each breast's footprint (MakeHuman's breast bone weights)
@@ -667,6 +687,22 @@ computeSkinNative(maleSkin(), fem, skinRegion);
 // (near the skin they follow the skin's offsets, deeper inside the smooth field).
 // ---------------------------------------------------------------------------
 computeSkinNative(maleSkin(), fem, skinRegion);
+// Blimp mode: this body at about five times its weight. The skin takes MakeHuman's heavy male
+// (fat and pose); everything inside only follows the pose (arms and legs held apart), so the fat
+// shows as the thick layer between skin and muscle.
+const ob = computeSkinObese([...maleSkin(), ...allParts.filter((p) => p.sys === 'skin' && /^Urogenital region$/.test(p.name))], fem, skinRegion, { rigid: (p) => /^Urogenital region$/.test(p.name) });
+{
+  const pts = [], mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9];
+  for (const p of maleSkin()) {
+    const P = p.mesh.P;
+    for (let k = 0; k < P.length / 3; k++) {
+      pts.push([P[k * 3], P[k * 3 + 1], P[k * 3 + 2], p.obP[k * 3], p.obP[k * 3 + 1], p.obP[k * 3 + 2], 1]);
+      for (let a = 0; a < 3; a++) { const v = P[k * 3 + a] + p.obD[k * 3 + a]; mn[a] = Math.min(mn[a], v); mx[a] = Math.max(mx[a], v); }
+    }
+  }
+  ob.F = fem.F; ob.field = skinField(pts, fem.F); ob.at = fieldSampler(fem.F, ob.field); ob.bounds = [mn, mx];
+  console.log(`blimp: pose field from ${pts.length} skin samples; body ${(mx[0] - mn[0]).toFixed(2)} x ${(mx[1] - mn[1]).toFixed(2)} x ${(mx[2] - mn[2]).toFixed(2)} m; genitals moved ${ob.genital.map((v) => (v * 100).toFixed(1)).join(', ')} cm`);
+}
 // Female offset for anything inside the body: near the skin it follows the closest skin (inverse
 // distance over the skin of that body region, so a finger follows its own finger and not the
 // thigh beside it); deeper it blends into the smooth field. Breast skin is ignored (weight).
@@ -1246,7 +1282,7 @@ function simplified(p) {
 const SYS_IDS = [...new Set(allParts.map((p) => p.sys))];
 for (const sys of SYS_IDS) {
   const ps = allParts.filter((p) => p.sys === sys);
-  const info = writePack(`${OUT}/base/${sys}.mvb`, ps.map((p) => ({ id: p.id, mesh: p.mesh, I: simplified(p), flow: flowOf.get(p.id), femD: sys === 'skin' ? p.femD || new Float32Array(p.mesh.P.length) : p.femR || null, femN: p.femN })), { femNormals: sys === 'skin' });
+  const info = writePack(`${OUT}/base/${sys}.mvb`, ps.map((p) => ({ id: p.id, mesh: p.mesh, I: simplified(p), flow: flowOf.get(p.id), femD: sys === 'skin' ? p.femD || new Float32Array(p.mesh.P.length) : p.femR || null, femN: p.femN, obD: sys === 'skin' ? p.obD || new Float32Array(p.mesh.P.length) : null, obN: p.obN })), { femNormals: sys === 'skin' });
   manifest.systems.push({ id: sys, file: `base/${sys}.mvb`, ...info });
   console.log(`base ${sys}: verts ${info.vCount}, tris ${info.iCount / 3}, ${(info.bytes / 1e6).toFixed(2)} MB`);
   for (const r of PACK_REGIONS) {
@@ -1278,6 +1314,13 @@ for (const p of allParts) { // centre of the part in the female body
   fs.writeFileSync(`${OUT}/base/femfield.mvb`, gz);
   manifest.femField = { file: 'base/femfield.mvb', dims: fem.F.dims, min: fem.F.min, cell: fem.F.cell, bytes: gz.length };
 }
+{ // Blimp mode: the pose field for what is inside (same grid), and the heavy body's bounds
+  const [nx, ny, nz] = ob.F.dims, buf = Buffer.alloc(nx * ny * nz * 6);
+  for (let i = 0; i < nx * ny * nz * 3; i++) buf.writeInt16LE(Math.max(-32767, Math.min(32767, Math.round(ob.field[i] * 1e4))), i * 2);
+  const gz = zlib.gzipSync(buf, { level: 9 });
+  fs.writeFileSync(`${OUT}/base/obfield.mvb`, gz);
+  manifest.blimp = { file: 'base/obfield.mvb', dims: ob.F.dims, min: ob.F.min, cell: ob.F.cell, bytes: gz.length, bounds: ob.bounds.map((v) => v.map(r4)), genital: ob.genital.map(r4) };
+}
 // Hair (skin view): scalp hair, eyebrows and eyelashes for both bodies (hair.mjs)
 {
   const skin = maleSkin().filter((p) => p.femN).map((p) => ({ name: p.name, side: p.side, P: p.mesh.P, D: p.femD, N: p.mesh.N, FN: p.femN, I: p.mesh.I }));
@@ -1295,8 +1338,44 @@ for (const p of allParts) { // centre of the part in the female body
 // The two skins: this body's skin is now the male's only (the female has MakeHuman's), and the
 // pudendal fill becomes the male doll crotch (pg 3: shown only in the doll modes, for its own sex)
 for (const p of maleSkin()) { if (p.name === 'Pudendal region') { p.sex = 1; p.pg = 3; } else if (!p.sex) p.sex = 1; }
-manifest.partFields = ['id', 'sys', 'name', 'side', 'groups', 'center', 'extent', 'hidden', 'sex', 'anim', 'pivot', 'axis', 'region', 'flags', 'femaleOffset', 'pg', 'femaleCenter'];
-manifest.parts = allParts.map((p) => [p.id, p.sys, p.name, p.side, p.groups.join('>'), p.c.map(r4), p.ext.map(r4), p.hidden ? 1 : 0, p.sex, p.anim, p.pivot.map(r4), p.axis.map((v) => +v.toFixed(3)), p.region, (p.femSpace ? 4 : 0) + (p.native ? 8 : 0), (FEMALE_OFFSET[p.name] || [0, 0, 0]), p.pg || 0, p.cF.map(r4)]);
+// Blimp mode, part by part: organs that grow (about their organ's centre: the heart's parts together),
+// fat colour (visceral fat, fatty liver), and what moves with the expanded abdomen and the raised
+// diaphragm ("visceral": the abdominal organs and wall, and what sits on the diaphragm)
+{
+  const isHeart = (p) => /^(Heart|Arteries of heart|Cardiac veins)/.test(p.groups.join('>')) && p.sys !== 'nerves' && p.sys !== 'lymph';
+  const GROUPS = [
+    { test: isHeart, scale: [1.28, 1.28, 1.28], tint: 0 },
+    { test: (p) => p.name === 'Liver', scale: [1.4, 1.4, 1.4], tint: -0.75 },
+    { test: (p) => p.name === 'Greater omentum', scale: [1.25, 1.2, 3.2], tint: 0.95 },
+    { test: (p) => p.name === 'Lesser omentum', scale: [1.2, 1.2, 1.8], tint: 0.8 },
+    { test: (p) => /^(Pancreas|Pancreatic duct|Accessory pancreatic duct)$/.test(p.name), scale: [1.15, 1.15, 1.15], tint: 0.3 },
+    { test: (p) => p.name === 'Kidney' || /^Intrarenal (arteries|veins) of (right|left) kidney$/.test(p.name), scale: [1.12, 1.12, 1.12], tint: 0, bySide: true },
+  ];
+  const sideOf = (p) => p.side || (/left kidney/.test(p.name) ? 'L' : /right kidney/.test(p.name) ? 'R' : null);
+  for (const g of GROUPS) {
+    const members = allParts.filter((p) => p.sys !== 'skin' && g.test(p));
+    const sets = g.bySide ? ['L', 'R'].map((sd) => members.filter((p) => sideOf(p) === sd)) : [members];
+    for (const set of sets) {
+      if (!set.length) continue;
+      const mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9];
+      for (const p of set) for (let a = 0; a < 3; a++) { mn[a] = Math.min(mn[a], p.mn[a]); mx[a] = Math.max(mx[a], p.mx[a]); }
+      const c = mn.map((v, a) => (v + mx[a]) / 2);
+      for (const p of set) { p.obC = c; p.obS = g.scale; p.obT = g.tint; }
+    }
+  }
+  const wall = /^(Rectus abdominis muscle|External oblique muscle|Internal oblique muscle|Transversus abdominis muscle|Pyramidalis muscle|Diaphragm)$/;
+  let nv = 0;
+  for (const p of allParts) {
+    if (p.sys === 'skin' || p.sys === 'skeleton' || p.sys === 'joints') continue;
+    const inside = Math.abs(p.c[0]) < 0.15 && p.c[1] > 0.86 && p.c[1] < 1.24 && p.c[2] > -0.07;
+    if ((p.sys === 'muscles' ? wall.test(p.name) : inside) || isHeart(p) || /lung/i.test(p.name)) { p.obV = 1; nv++; }
+    // the external genitals move with their skin (code 2: the genital block's offset)
+    if (p.sex === 1 && p.pg === 1 && Math.abs(p.c[0]) < 0.06 && p.c[1] < 0.87 && p.ext[1] < 0.13) p.obV = 2;
+  }
+  console.log(`blimp: ${allParts.filter((p) => p.obS).length} parts grow, ${nv} move with the abdomen and diaphragm`);
+}
+manifest.partFields = ['id', 'sys', 'name', 'side', 'groups', 'center', 'extent', 'hidden', 'sex', 'anim', 'pivot', 'axis', 'region', 'flags', 'femaleOffset', 'pg', 'femaleCenter', 'blimp'];
+manifest.parts = allParts.map((p) => [p.id, p.sys, p.name, p.side, p.groups.join('>'), p.c.map(r4), p.ext.map(r4), p.hidden ? 1 : 0, p.sex, p.anim, p.pivot.map(r4), p.axis.map((v) => +v.toFixed(3)), p.region, (p.femSpace ? 4 : 0) + (p.native ? 8 : 0), (FEMALE_OFFSET[p.name] || [0, 0, 0]), p.pg || 0, p.cF.map(r4), p.obS || p.obV ? [...(p.obC || p.c).map(r4), p.obV || 0, ...(p.obS || [1, 1, 1]), p.obT || 0] : 0]);
 // Eyes: iris centre, facing axis (least-variance direction of the iris disc) and radii, for the shader
 const eyes = [];
 for (const side of ['R', 'L']) {

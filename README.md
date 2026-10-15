@@ -25,6 +25,10 @@ It opens full screen like an app and works offline after the first visit.
 - **Ken mode** and **Barbie mode**: a family-friendly view that smooths over the genitals and
   nipples like a doll. The internal organs, including the uterus, ovaries and prostate, stay visible.
   The setting is remembered on each device.
+- **Blimp mode** (male body): the man at about five times his weight. It shows the thick layer of
+  fat under the skin (yellow in cross-sections) and the visceral fat apron (greater omentum). It also
+  shows an enlarged fatty liver, a bigger heart and a raised diaphragm. The skeleton stays the same size,
+  and the arms and legs are held further apart.
 
 ## Controls
 
@@ -78,6 +82,9 @@ The `pipeline/` scripts need the Z-Anatomy PC version, MakeHuman's data files an
   its regions after this body's skin. Everything inside follows her skin: a smooth 3D offset field plus
   per-vertex corrections near the skin. The eyes sit in her eye sockets, and the hands are mapped
   bone by bone.
+- Blimp mode's body shape is MakeHuman's heavy male: its weight and fat targets are pushed well past
+  their range and smoothed (`OBESE_MALE` in `pipeline/femskin.mjs`), to about 4.9 times the body
+  volume. The organ changes are illustrative.
 - The female reproductive organs, breast tissue and nipples are modeled procedurally from standard
   adult measurements. They are not scan-based.
 - The hair, eyebrows and eyelashes shown with solid skin (`pipeline/hair.mjs`) are generated for this
