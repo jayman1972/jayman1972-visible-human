@@ -1,11 +1,11 @@
 // Service worker: makes the app installable and usable offline.
 // App shell and the base model are cached at install; full-detail packs are cached
 // the first time they are viewed. A new build gets a new version and replaces all the caches.
-const VERSION = '0d86cf97cab3';
+const VERSION = 'a26bf1808ac3';
 const SHELL = `vh-shell-${VERSION}`;
 const DETAIL = `vh-detail-${VERSION}`; // full-detail packs change with the data, so each build starts afresh
 const FONTS = 'vh-fonts-v1';
-const PRECACHE = ["./","index.html","app.4666072579.js","manifest.webmanifest","icons/apple-touch-icon.png","icons/favicon-32.png","icons/favicon-64.png","icons/icon-192.png","icons/icon-512.png","icons/maskable-512.png","data/manifest.json","data/refs.json","data/base/femfield.mvb","data/base/hair.mvb","data/base/joints.mvb","data/base/lymph.mvb","data/base/muscles.mvb","data/base/nerves.mvb","data/base/obfield.mvb","data/base/organs.mvb","data/base/skeleton.mvb","data/base/skin.mvb","data/base/vessels.mvb"];
+const PRECACHE = ["./","index.html","app.37a9e5410e.js","manifest.webmanifest","icons/apple-touch-icon.png","icons/favicon-32.png","icons/favicon-64.png","icons/icon-192.png","icons/icon-512.png","icons/maskable-512.png","data/manifest.json","data/refs.json","data/base/femfield.mvb","data/base/hair.mvb","data/base/joints.mvb","data/base/lymph.mvb","data/base/muscles.mvb","data/base/nerves.mvb","data/base/obfield.mvb","data/base/organs.mvb","data/base/skeleton.mvb","data/base/skin.mvb","data/base/vessels.mvb"];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(PRECACHE)).then(() => self.skipWaiting()));

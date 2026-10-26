@@ -666,7 +666,7 @@ computeSkinNative(maleSkin(), fem, skinRegion);
     allParts.push({ id: gid++, sys: fp.sys, name: fp.name, side: fp.side || null, groups: fp.groups, mesh, mn, mx, c: mn.map((v, i) => (v + mx[i]) / 2), ext: mx.map((v, i) => v - mn[i]), mainCat, ratio: fp.sys === 'skin' ? 1.0 : 0.6, hidden: false, sex: 2, anim, femSpace: !!fp.femSpace, pg: fp.pg || 0 });
   }
   console.log('female parts', allParts.filter((p) => p.sex === 2).length);
-  // Ken mode: hide the male genital skin and every structure that reaches outside the smooth crotch
+  // Ken Doll mode: hide the male genital skin and every structure that reaches outside the smooth crotch
   ug.forEach((p) => { p.pg = 1; });
   if (fparts.protrudes) {
     const flagged = [];
@@ -677,7 +677,7 @@ computeSkinNative(maleSkin(), fem, skinRegion);
       for (let i = 0; i < P.length; i += 3) if (fparts.protrudes([P[i], P[i + 1], P[i + 2]])) k++;
       if (k >= 6 && k / n >= 0.01) { p.pg = 1; flagged.push(`${p.sys}:${p.name}${p.side ? '.' + p.side : ''} (${(100 * k / n).toFixed(0)}%)`); }
     }
-    console.log('ken mode hides', flagged.length, 'parts:', flagged.join(', '));
+    console.log('Ken Doll mode hides', flagged.length, 'parts:', flagged.join(', '));
   }
 }
 
@@ -903,7 +903,7 @@ function refineMesh(mesh, wantSplit) {
     console.log(`female skin normals: ${blended} shared vertices blended`);
   }
   // The pudendal fill meets its neighbours at a slight crease: feather its normals toward the
-  // neighbouring skin over ~12 mm so it shades as one surface (it is a smooth doll crotch in Ken mode).
+  // neighbouring skin over ~12 mm so it shades as one surface (it is a smooth doll crotch in Ken Doll mode).
   {
     const patch = allParts.find((p) => p.sys === 'skin' && p.name === 'Pudendal region');
     if (patch) {
@@ -1345,9 +1345,14 @@ for (const p of maleSkin()) { if (p.name === 'Pudendal region') { p.sex = 1; p.p
   const isHeart = (p) => /^(Heart|Arteries of heart|Cardiac veins)/.test(p.groups.join('>')) && p.sys !== 'nerves' && p.sys !== 'lymph';
   const GROUPS = [
     { test: isHeart, scale: [1.28, 1.28, 1.28], tint: 0 },
-    { test: (p) => p.name === 'Liver', scale: [1.4, 1.4, 1.4], tint: -0.75 },
-    { test: (p) => p.name === 'Greater omentum', scale: [1.25, 1.2, 3.2], tint: 0.95 },
-    { test: (p) => p.name === 'Lesser omentum', scale: [1.2, 1.2, 1.8], tint: 0.8 },
+    // (anchor: the side of the box that stays put, per axis: -1 min, 0 centre, 1 max. The fatty liver
+    // grows down, back and leftward from under the right diaphragm, not out through the ribs; the
+    // greater omentum's fat apron thickens forward from its back and up from its lower edge, into
+    // the room the pushed-out wall makes (below), over the intestines, which settle back toward the spine)
+    { test: (p) => p.name === 'Liver', scale: [1.2, 1.4, 1.15], tint: -0.75, anchor: [-1, 1, 1] },
+    { test: (p) => p.name === 'Greater omentum', scale: [1, 1.15, 1.3], tint: 0.95, anchor: [0, -1, -1] },
+    { test: (p) => p.name === 'Lesser omentum', scale: [1.2, 1.2, 1.8], tint: 0.8, anchor: [0, 0, 1] },
+    { test: (p) => p.sys === 'organs' && /^(Jejunum|Ascending colon|Descending colon|Transverse colon|Free taenia|Mesocolic taenia|Omental taenia|Mesocolon|Vermiform appendix|Meso-appendix)$/.test(p.name), scale: [1, 1, 0.8], tint: 0, anchor: [0, 0, -1] },
     { test: (p) => /^(Pancreas|Pancreatic duct|Accessory pancreatic duct)$/.test(p.name), scale: [1.15, 1.15, 1.15], tint: 0.3 },
     { test: (p) => p.name === 'Kidney' || /^Intrarenal (arteries|veins) of (right|left) kidney$/.test(p.name), scale: [1.12, 1.12, 1.12], tint: 0, bySide: true },
   ];
@@ -1359,16 +1364,18 @@ for (const p of maleSkin()) { if (p.name === 'Pudendal region') { p.sex = 1; p.p
       if (!set.length) continue;
       const mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9];
       for (const p of set) for (let a = 0; a < 3; a++) { mn[a] = Math.min(mn[a], p.mn[a]); mx[a] = Math.max(mx[a], p.mx[a]); }
-      const c = mn.map((v, a) => (v + mx[a]) / 2);
+      const c = mn.map((v, a) => (v + mx[a]) / 2 + (g.anchor ? g.anchor[a] : 0) * (mx[a] - v) / 2);
       for (const p of set) { p.obC = c; p.obS = g.scale; p.obT = g.tint; }
     }
   }
-  const wall = /^(Rectus abdominis muscle|External oblique muscle|Internal oblique muscle|Transversus abdominis muscle|Pyramidalis muscle|Diaphragm)$/;
+  // (the abdominal wall moves 1.4 times as far as what it holds: room for the fat behind it)
+  const wall = /^(Rectus abdominis muscle|External abdominal oblique muscle|Internal abdominal oblique muscle|Transversus abdominis muscle|Pyramidalis muscle|Linea alba|Inguinal ligament)$/;
   let nv = 0;
   for (const p of allParts) {
     if (p.sys === 'skin' || p.sys === 'skeleton' || p.sys === 'joints') continue;
     const inside = Math.abs(p.c[0]) < 0.15 && p.c[1] > 0.86 && p.c[1] < 1.24 && p.c[2] > -0.07;
-    if ((p.sys === 'muscles' ? wall.test(p.name) : inside) || isHeart(p) || /lung/i.test(p.name)) { p.obV = 1; nv++; }
+    const isWall = p.sys === 'muscles' && wall.test(p.name);
+    if (isWall || (p.sys === 'muscles' ? p.name === 'Diaphragm' : inside) || isHeart(p) || /lung/i.test(p.name)) { p.obV = isWall ? 1.4 : 1; nv++; }
     // the external genitals move with their skin (code 2: the genital block's offset)
     if (p.sex === 1 && p.pg === 1 && Math.abs(p.c[0]) < 0.06 && p.c[1] < 0.87 && p.ext[1] < 0.13) p.obV = 2;
   }

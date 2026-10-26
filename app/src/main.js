@@ -23,10 +23,10 @@ const stage = $('#stage');
 // start each explode phase slightly later
 const LAYERS = [
   { id: 'skin', label: 'Skin', dot: '#e3b896', on: true, base: 0.14, rmul: 1.0, amul: 1.0, delay: 0 },
-  { id: 'muscles', label: 'Muscles', dot: '#b4372f', on: false, base: 0.09, rmul: 1.0, amul: 1.0, delay: 0.015 },
-  { id: 'joints', label: 'Ligaments', dot: '#a9cdd7', on: false, base: 0.05, rmul: 1.0, amul: 1.03, delay: 0.03 },
+  { id: 'muscles', label: 'Muscles', dot: '#b4372f', on: true, base: 0.09, rmul: 1.0, amul: 1.0, delay: 0.015 },
+  { id: 'joints', label: 'Ligaments', dot: '#a9cdd7', on: true, base: 0.05, rmul: 1.0, amul: 1.03, delay: 0.03 },
   { id: 'skeleton', label: 'Skeleton', dot: '#e9dfc6', on: true, base: 0.06, rmul: 0.9, amul: 1.0, delay: 0.04 },
-  { id: 'lymph', label: 'Lymph nodes', dot: '#d9b38c', on: false, base: 0.04, rmul: 1.2, amul: 1.05, delay: 0.05 },
+  { id: 'lymph', label: 'Lymph nodes', dot: '#d9b38c', on: true, base: 0.04, rmul: 1.2, amul: 1.05, delay: 0.05 },
   { id: 'vessels', label: 'Heart & vessels', dot: '#d0262c', on: true, base: 0.03, rmul: 1.15, amul: 1.05, delay: 0.06 },
   { id: 'nerves', label: 'Brain & nerves', dot: '#f0cc4e', on: true, base: 0.02, rmul: 1.15, amul: 1.05, delay: 0.075 },
   { id: 'organs', label: 'Organs', dot: '#d98a7a', on: true, base: 0.0, rmul: 1.7, amul: 1.3, delay: 0.09 },
@@ -562,8 +562,8 @@ function setSex(female) {
 }
 
 // ---------------------------------------------------------------------------
-// Doll mode ("Ken mode" / "Barbie mode"): a family-friendly view with the genitals smoothed over
-function pgName() { return state.female >= 0.5 ? 'Barbie mode' : 'Ken mode'; }
+// Doll mode ("Ken Doll mode" / "Barbie mode"): a family-friendly view with the genitals smoothed over
+function pgName() { return state.female >= 0.5 ? 'Barbie mode' : 'Ken Doll mode'; }
 function syncPGButton() {
   const b = $('#pg-toggle'); if (!b) return;
   b.setAttribute('aria-pressed', state.pg ? 'true' : 'false');
